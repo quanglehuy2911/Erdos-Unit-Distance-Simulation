@@ -1100,18 +1100,27 @@ function generateAllPoints(method, maxN) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-//  Q-FRACTAL GENERATION  (adaptive global selection)
-//  Priority queue (min-dist from origin) drives expansion.
-//  Each node evaluates N_CAND evenly-spaced angles + cross-angles,
-//  scores all by (pairs DESC, minD2 DESC), then greedily selects
-//  up to K children that are at least MIN_SEP = 2π/K apart.
-//  K is a maximum — nodes in sparse areas may spawn fewer children.
-//  No randomness; deterministic and fully reproducible.
+//  Q-FRACTAL GENERATION  (candidate-pool / point-by-point)
+//
+//  No K parameter. Algorithm:
+//  1. Start from root (0,0).
+//  2. Each added point P enqueues ALL unit-circle positions around P
+//     as candidate positions into a global min-heap (key = dist²
+//     from origin). Cross-angle positions (analytically at distance 1
+//     from both P and an existing neighbour Q) are also enqueued.
+//  3. Pop the closest-to-origin candidate C.
+//     – If already occupied: skip (stale entry).
+//     – If no existing point is at unit distance from C: skip.
+//     – Otherwise: add C to the point set, enqueue around C.
+//  4. Repeat until n points placed.
+//
+//  "K" emerges naturally: the unit circle has circumference 2π, and
+//  with N_CAND=60 we sample every 6°. Dense regions self-regulate
+//  via posMap deduplication; no explicit K or sector bookkeeping.
 // ══════════════════════════════════════════════════════════════════
 function generateQFractal(maxN) {
-  const K_HARD = 60;  // absolute ceiling on children per node
-  const N_CAND = 72;  // base evenly-spaced evaluation grid (5° resolution)
-  const PREC   = 1e4;         // position dedup precision
+  const N_CAND = 60;   // unit-circle sampling resolution (6° per step)
+  const PREC   = 1e4;
   const TWO_PI = 2 * Math.PI;
 
   const pts    = [];           // { x, y, layer, parentIdx }
@@ -1178,25 +1187,26 @@ function generateQFractal(maxN) {
     return [alpha + beta, alpha - beta];
   }
 
-  // ── Min-heap sorted by distance² from origin ──────────────────
-  // Ensures the fractal always expands from the node closest to
-  // the origin, producing a compact circular growth front instead
-  // of arbitrary BFS-layer order.
-  const heap = [];
-  function heapPush(idx) {
-    const p = pts[idx];
-    heap.push({ idx, d2: p.x * p.x + p.y * p.y });
+  // ── Candidate heap: min-heap keyed by dist² from origin ────────
+  // Stores POSITIONS (not point indices). Each entry {cx,cy,d2}.
+  const heap     = [];
+  const heapKeys = new Set(); // posKey → avoid duplicate heap entries
+
+  function hPush(cx, cy) {
+    const k = posKey(cx, cy);
+    if (posMap.has(k) || heapKeys.has(k)) return;
+    heapKeys.add(k);
+    heap.push({ cx, cy, d2: cx * cx + cy * cy });
     let i = heap.length - 1;
     while (i > 0) {
-      const par = (i - 1) >> 1;
-      if (heap[par].d2 <= heap[i].d2) break;
-      const tmp = heap[par]; heap[par] = heap[i]; heap[i] = tmp;
-      i = par;
+      const p = (i - 1) >> 1;
+      if (heap[p].d2 <= heap[i].d2) break;
+      const t = heap[p]; heap[p] = heap[i]; heap[i] = t; i = p;
     }
   }
-  function heapPop() {
-    if (heap.length === 1) return heap.pop().idx;
-    const minIdx = heap[0].idx;
+  function hPop() {
+    if (heap.length === 1) return heap.pop();
+    const min = heap[0];
     heap[0] = heap.pop();
     let i = 0;
     for (;;) {
@@ -1205,87 +1215,52 @@ function generateQFractal(maxN) {
       if (l < heap.length && heap[l].d2 < heap[s].d2) s = l;
       if (r < heap.length && heap[r].d2 < heap[s].d2) s = r;
       if (s === i) break;
-      const tmp = heap[i]; heap[i] = heap[s]; heap[s] = tmp;
-      i = s;
+      const t = heap[i]; heap[i] = heap[s]; heap[s] = t; i = s;
     }
-    return minIdx;
+    return min;
   }
 
-  // ── Priority-queue expansion ────────────────────────────────────
-  heapPush(addPt(0, 0, 0, -1));
+  // Enqueue all unit-circle positions around point (px, py):
+  //   (a) N_CAND evenly-spaced grid positions
+  //   (b) Cross-angle positions (analytically exact, at dist 1 from
+  //       both px,py AND an existing neighbour)
+  function enqueue(px, py) {
+    for (let i = 0; i < N_CAND; i++)
+      hPush(px + Math.cos(TWO_PI * i / N_CAND),
+            py + Math.sin(TWO_PI * i / N_CAND));
+    const nb = lhNearby(px, py);
+    for (const ni of nb) {
+      const q = pts[ni];
+      for (const θ of crossAngles(px, py, q.x, q.y))
+        hPush(px + Math.cos(θ), py + Math.sin(θ));
+    }
+  }
+
+  // ── Expansion loop ───────────────────────────────────────────────
+  addPt(0, 0, 0, -1);
+  enqueue(0, 0);
 
   while (pts.length < maxN && heap.length > 0) {
-    const qi = heapPop();
-    const { x, y, layer } = pts[qi];
-    const nearby = lhNearby(x, y);
+    const { cx, cy } = hPop();
+    const k = posKey(cx, cy);
+    heapKeys.delete(k);
+    if (posMap.has(k)) continue;   // stale entry — position taken
 
-    // ── Adaptive K: uniform spawning ratio ~2.7× at every radius ──
-    // Root (r<0.5): hardcoded K=6 (hex base).
-    //   Old bug: formula gave K=18 for root → 3× dense inner ring.
-    // Other nodes: K_eff = ceil(ring(r+1)/ring(r) × 2.5), min 2.
-    //   ratio ring(r+1)/ring(r) → 1 as r→∞, so K_eff → 3 (overlap buffer).
-    //   Removes the K_MIN=6 floor that caused 4–5× over-sampling at r≥2.
-    // D_MIN2 check below absorbs the ~2.7× excess by rejecting candidates
-    // placed too close to existing points, giving uniform final density.
-    const r      = Math.sqrt(x * x + y * y);
-    const ringR  = Math.max(1, Math.round(TWO_PI * r));
-    const ringR1 = Math.round(TWO_PI * (r + 1));
-    const K_eff  = r < 0.5
-                 ? 6
-                 : Math.min(K_HARD, Math.max(2, Math.ceil(ringR1 / ringR * 2.5)));
-    const minSep = TWO_PI / K_eff;
-    const nCand  = Math.max(N_CAND, K_eff * 4);
-
-    // ── 1. Build candidate pool ─────────────────────────────────
-    // (a) Evenly-spaced grid across full circle — no randomness
-    const cands = [];
-    for (let i = 0; i < nCand; i++)
-      cands.push(TWO_PI * i / nCand);
-    // (b) Cross-angle candidates (analytically exact unit-distance)
-    for (const ni of nearby) {
-      if (ni === qi) continue;
+    // Must have ≥1 existing point at unit distance (connectivity check)
+    const nb = lhNearby(cx, cy);
+    let pairs = 0, parentIdx = -1, parentD2 = Infinity;
+    for (const ni of nb) {
       const q = pts[ni];
-      for (const θ of crossAngles(x, y, q.x, q.y))
-        cands.push(normAngle(θ));
-    }
-
-    // ── 2. Score every candidate ────────────────────────────────
-    // Primary  : pairs  ↑  (unit-distance connections)
-    // Tiebreak : minD2  ↑  (gap-filling — prefer isolated spots)
-    const scored = [];
-    for (const θ of cands) {
-      const cx = x + Math.cos(θ), cy = y + Math.sin(θ);
-      if (posMap.has(posKey(cx, cy))) continue;
-      let pairs = 0, minD2 = Infinity;
-      for (const ni of nearby) {
-        const q = pts[ni];
-        const ddx = cx - q.x, ddy = cy - q.y, d2 = ddx * ddx + ddy * ddy;
-        if (Math.abs(d2 - 1.0) < EPS) pairs++;
-        if (ni !== qi && d2 < minD2) minD2 = d2;
+      const ddx = cx - q.x, ddy = cy - q.y, d2 = ddx * ddx + ddy * ddy;
+      if (Math.abs(d2 - 1.0) < EPS) {
+        pairs++;
+        if (d2 < parentD2) { parentD2 = d2; parentIdx = ni; }
       }
-      scored.push({ θ, pairs, minD2: minD2 === Infinity ? 0 : minD2 });
     }
-    scored.sort((a, b) => b.pairs - a.pairs || b.minD2 - a.minD2);
+    if (pairs === 0) continue;     // isolated candidate — skip
 
-    // ── 3. Greedy selection: up to K_eff children, ≥ minSep apart ─
-    const chosen = [];
-    for (const { θ } of scored) {
-      if (chosen.length >= K_eff || pts.length + chosen.length >= maxN) break;
-      let ok = true;
-      for (const φ of chosen) {
-        let d = Math.abs(θ - φ) % TWO_PI;
-        if (d > Math.PI) d = TWO_PI - d;
-        if (d < minSep) { ok = false; break; }
-      }
-      if (ok) chosen.push(θ);
-    }
-
-    // ── 4. Add children to point set and heap ───────────────────
-    for (const θ of chosen) {
-      if (pts.length >= maxN) break;
-      const childIdx = addPt(x + Math.cos(θ), y + Math.sin(θ), layer + 1, qi);
-      if (childIdx !== -1) heapPush(childIdx);
-    }
+    const depth = parentIdx >= 0 ? pts[parentIdx].layer + 1 : 0;
+    if (addPt(cx, cy, depth, parentIdx) !== -1) enqueue(cx, cy);
   }
 
   return pts.slice(0, maxN);
@@ -2600,21 +2575,21 @@ function drawAlgQFractal(canvas, points) {
   // Depth legend
   ctx.font = '10px monospace';
   ctx.fillStyle = '#6070a0';
-  ctx.fillText(`depth 0–${maxDepth}  |  n=${points.length}  |  K adaptive (6–60)`, 10, H - 10);
+  ctx.fillText(`depth 0–${maxDepth}  |  n=${points.length}  |  candidate-pool, no K`, 10, H - 10);
 }
 
 function updateQFractalInfo() {
   const el = document.getElementById('qfractal-info');
   if (!el) return;
   el.innerHTML = state.lang === 'vi'
-    ? `K thích nghi: mỗi nút sinh đủ con để lấp vòng tiếp theo.<br>` +
-      `<b>K(r) = clamp(⌈2π(r+1)/2πr × 3⌉, 6, 60)</b><br>` +
-      `r=0 → K=6 &nbsp;|&nbsp; r=1 → K=6 &nbsp;|&nbsp; r≥2 → K≈6–9.<br>` +
-      `Hệ số ×3 bù trừ va chạm vị trí. Góc chia đều + cross-angle.`
-    : `Adaptive K: each node spawns enough children to fill the next ring.<br>` +
-      `<b>K(r) = clamp(⌈2π(r+1)/2πr × 3⌉, 6, 60)</b><br>` +
-      `r=0 → K=6 &nbsp;|&nbsp; r=1 → K=6 &nbsp;|&nbsp; r≥2 → K≈6–9.<br>` +
-      `×3 overlap factor compensates for position collisions.`;
+    ? `Sinh điểm theo pool ứng viên toàn cục — không có tham số K.<br>` +
+      `Mỗi điểm mới enqueue 60 vị trí chia đều + cross-angle vào heap.<br>` +
+      `Pop vị trí gần gốc nhất → kiểm tra kết nối d=1 → thêm vào tập.<br>` +
+      `Mật độ tự điều chỉnh qua posMap dedup và cross-angle.`
+    : `Point-by-point generation via global candidate pool — no K.<br>` +
+      `Each new point enqueues 60 evenly-spaced + cross-angle positions.<br>` +
+      `Pop closest-to-origin candidate → check d=1 connectivity → add.<br>` +
+      `Density self-regulates via posMap dedup and cross-angle scoring.`;
 }
 
 function drawFrame() {

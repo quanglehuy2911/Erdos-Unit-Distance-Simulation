@@ -382,6 +382,53 @@
     text-transform: uppercase;
     pointer-events: none;
   }
+
+  /* ── Large-N warning popup ── */
+  #large-n-backdrop {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.65);
+    z-index: 999;
+    align-items: center;
+    justify-content: center;
+  }
+  #large-n-backdrop.show { display: flex; }
+  #large-n-popup {
+    background: #1a1f3a;
+    border: 1px solid var(--orange);
+    border-radius: 10px;
+    padding: 22px 26px;
+    max-width: 380px;
+    width: 90%;
+    box-shadow: 0 0 32px rgba(255,145,0,0.25);
+    color: var(--fg);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  #large-n-popup h3 {
+    margin: 0 0 10px;
+    font-size: 15px;
+    color: var(--orange);
+    display: flex; align-items: center; gap: 7px;
+  }
+  #large-n-popup .popup-body { margin-bottom: 18px; color: #c0cce8; }
+  #large-n-popup .popup-body b { color: var(--fg); }
+  #large-n-popup .popup-btns {
+    display: flex; gap: 10px; justify-content: flex-end;
+  }
+  #large-n-popup .popup-btns button {
+    padding: 7px 18px; border-radius: 6px; border: none;
+    font-size: 12px; font-weight: 700; cursor: pointer;
+    transition: opacity .15s;
+  }
+  #large-n-popup .popup-btns button:hover { opacity: .8; }
+  #btn-popup-cancel {
+    background: #2a3050; color: var(--fg);
+    border: 1px solid #3a4060 !important;
+  }
+  #btn-popup-confirm {
+    background: var(--orange); color: #0a0e1a;
+  }
 </style>
 </head>
 <body>
@@ -2136,24 +2183,27 @@ function selectMethod(m) {
 function onInputN(val) {
   const n = Math.min(10000000000, Math.max(10, Math.round(+val)));
   if (!isFinite(n)) return;
-  state.maxN = n;
-  document.getElementById('inp-n').value = n;
-  // Highlight matching preset if any
-  document.querySelectorAll('.preset-btn').forEach(btn => {
-    btn.classList.toggle('active-preset', +btn.dataset.n === n);
+  warnLargeN(n, () => {
+    state.maxN = n;
+    document.getElementById('inp-n').value = n;
+    document.querySelectorAll('.preset-btn').forEach(btn => {
+      btn.classList.toggle('active-preset', +btn.dataset.n === n);
+    });
+    updateLayerInfo();
+    doReset();
   });
-  updateLayerInfo();
-  doReset();
 }
 
 function setPresetN(n) {
-  state.maxN = n;
-  document.getElementById('inp-n').value = n;
-  document.querySelectorAll('.preset-btn').forEach(btn => {
-    btn.classList.toggle('active-preset', +btn.dataset.n === n);
+  warnLargeN(n, () => {
+    state.maxN = n;
+    document.getElementById('inp-n').value = n;
+    document.querySelectorAll('.preset-btn').forEach(btn => {
+      btn.classList.toggle('active-preset', +btn.dataset.n === n);
+    });
+    updateLayerInfo();
+    doReset();
   });
-  updateLayerInfo();
-  doReset();
 }
 
 function onSliderSpeed(val) {
@@ -2587,6 +2637,69 @@ window.addEventListener('DOMContentLoaded', () => {
 
   window.addEventListener('resize', doLayout);
 });
+
+// ══════════════════════════════════════════════════════════════════
+//  LARGE-N WARNING POPUP
+// ══════════════════════════════════════════════════════════════════
+const LARGE_N_WARN = 100000;   // threshold: warn when n ≥ 100K
+let _pendingN = null;           // the n value waiting for user confirmation
+
+function warnLargeN(n, applyFn) {
+  // Always apply immediately for small n
+  if (n < LARGE_N_WARN) { applyFn(); return; }
+
+  _pendingN = { n, applyFn };
+
+  const lang = state.lang;
+  const nStr = fmtN(n);
+  const msg = lang === 'vi'
+    ? `Bạn đang chọn <b>${nStr} điểm</b>.<br><br>` +
+      `Mô phỏng với số điểm lớn sẽ tốn nhiều tài nguyên và có thể gây <b>lag / giật</b> trên máy yếu.<br><br>` +
+      `<span style="color:var(--muted)">Gợi ý: dùng tốc độ cao (≥ 1000 đ/s) để hoàn thành nhanh hơn.</span>`
+    : `You selected <b>${nStr} points</b>.<br><br>` +
+      `Simulating large point counts is resource-intensive and may <b>lag</b> on slower devices.<br><br>` +
+      `<span style="color:var(--muted)">Tip: use a high speed (≥ 1,000 pts/s) to finish faster.</span>`;
+
+  document.getElementById('large-n-msg').innerHTML = msg;
+  // Update button labels for current language
+  document.getElementById('btn-popup-cancel').textContent  = lang === 'vi' ? '← Quay lại' : '← Go back';
+  document.getElementById('btn-popup-confirm').textContent = lang === 'vi' ? 'Tiếp tục →' : 'Continue →';
+  document.getElementById('large-n-backdrop').classList.add('show');
+}
+
+function confirmLargeN(proceed) {
+  document.getElementById('large-n-backdrop').classList.remove('show');
+  if (proceed && _pendingN) {
+    _pendingN.applyFn();
+  } else if (!proceed) {
+    // Restore previous n in the input display (don't change state.maxN)
+    document.getElementById('inp-n').value = state.maxN;
+    document.querySelectorAll('.preset-btn').forEach(btn => {
+      btn.classList.toggle('active-preset', +btn.dataset.n === state.maxN);
+    });
+    updateLayerInfo();
+  }
+  _pendingN = null;
+}
+
+// Close popup on backdrop click
+document.addEventListener('DOMContentLoaded', () => {
+  document.getElementById('large-n-backdrop').addEventListener('click', e => {
+    if (e.target === document.getElementById('large-n-backdrop')) confirmLargeN(false);
+  });
+});
 </script>
+
+<!-- ── Large-N warning popup ── -->
+<div id="large-n-backdrop">
+  <div id="large-n-popup">
+    <h3>⚠ Cảnh báo số điểm lớn</h3>
+    <div class="popup-body" id="large-n-msg"></div>
+    <div class="popup-btns">
+      <button id="btn-popup-cancel" onclick="confirmLargeN(false)">← Quay lại</button>
+      <button id="btn-popup-confirm" onclick="confirmLargeN(true)">Tiếp tục →</button>
+    </div>
+  </div>
+</div>
 </body>
 </html>

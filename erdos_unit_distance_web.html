@@ -26,6 +26,7 @@
     --gold:   #ffd700;
     --red:    #ff4444;
     --purple: #cc44ff;
+    --pink:   #ff6b9d;
     --text:   #c8d0ff;
     --muted:  #6070a0;
     --radius: 8px;
@@ -144,9 +145,11 @@
   #card-0 { --current-color: var(--cyan); }
   #card-1 { --current-color: var(--green); }
   #card-2 { --current-color: var(--orange); }
+  #card-3 { --current-color: var(--pink); }
   #card-0 .mc-title { color: var(--cyan); }
   #card-1 .mc-title { color: var(--green); }
   #card-2 .mc-title { color: var(--orange); }
+  #card-3 .mc-title { color: var(--pink); }
 
   /* Controls */
   .ctrl-row {
@@ -492,6 +495,10 @@
           <div class="mc-title">OpenAI CM Multi-layer</div>
           <div class="mc-sub" data-i18n="mc2Sub">n^{1.014} · tháp class field Golod-Shafarevich</div>
         </div>
+        <div class="method-card" id="card-3" onclick="selectMethod(3)">
+          <div class="mc-title">Q-Fractal Generation</div>
+          <div class="mc-sub" data-i18n="mc3Sub">Cây fractal ngẫu nhiên · K nhánh · mỗi nhánh 1 điểm/cung 2π/K</div>
+        </div>
       </div>
     </div>
 
@@ -549,6 +556,18 @@
       <input type="range" id="sl-layers" min="2" max="8" value="3"
              oninput="onSliderLayers(this.value)">
       <div id="layer-info" class="info-box" style="font-size:10px;margin-top:4px;line-height:1.8"></div>
+    </div>
+
+    <!-- Q-Fractal config (shown only when method 3 is active) -->
+    <div id="qfractal-cfg" style="display:none">
+      <div class="section-label" data-i18n="secQFractalCfg">Cấu hình Q-Fractal</div>
+      <div class="ctrl-row">
+        <span class="ctrl-label" data-i18n="ctrlBranch">Nhánh K</span>
+        <span class="ctrl-val" id="lbl-qk">6</span>
+      </div>
+      <input type="range" id="sl-qk" min="3" max="16" value="6"
+             oninput="onSliderQK(this.value)">
+      <div id="qfractal-info" class="info-box" style="font-size:10px;margin-top:4px;line-height:1.7"></div>
     </div>
 
     <div class="btn-row">
@@ -745,7 +764,9 @@ function openAINuTheory(n) { return Math.pow(n, 1.014); }
 function computeNuTheory(method, n) {
   if (method === 0) return exactSquareNu(n);
   if (method === 1) return eisensteinNuApprox(n);
-  return openAINuTheory(n);
+  if (method === 2) return openAINuTheory(n);
+  // Q-Fractal: tree structure guarantees n-1 pairs (lower bound)
+  return n > 1 ? n - 1 : 0;
 }
 
 // Run theory scan: compute ν at ~60 log-spaced points from 10 → maxN,
@@ -824,7 +845,7 @@ function runTheoryMode(method, maxN) {
 }
 
 function showTheoryOverlay(method, n, nu, alpha) {
-  const color = [COLORS.cyan, COLORS.green, COLORS.orange][method];
+  const color = [COLORS.cyan, COLORS.green, COLORS.orange, '#ff6b9d'][method] ?? '#ff6b9d';
   const T = LANG[state.lang];
   const html = `
     <div class="to-badge">${T.toTitle}</div>
@@ -862,6 +883,7 @@ let state = {
   lang: 'vi',        // ngôn ngữ hiển thị: 'vi' | 'en'
   prime: 7,          // số nguyên tố P cho OpenAI multi-layer
   numLayers: 3,      // số tầng cho OpenAI multi-layer (2–8)
+  qK: 6,             // số nhánh K cho Q-Fractal Generation
 };
 
 // Cache vị trí screen (canvas px) của mỗi điểm sau mỗi lần vẽ — dùng cho click detection
@@ -869,7 +891,7 @@ let _lastAlgPos  = [];
 let _lastProjPos = [];
 
 // Per-method data stores (persist across resets for chart multi-dataset)
-let chartData = [[], [], []]; // one array per method for scatter points
+let chartData = [[], [], [], []]; // one array per method for scatter points
 
 // Interactive view state
 const view3d = { az: Math.PI*0.22, el: Math.PI*0.20, zoom: 1.0, panX: 0, panY: 0, drag: false, panDrag: false, lx: 0, ly: 0, hoverX: null, hoverY: null };
@@ -924,6 +946,21 @@ const METHOD_INFO = [
     },
     header: 'max pairs at distance 1 — CM multi-layer (conceptual)',
   },
+  {
+    color: '#ff6b9d',
+    name: { vi: 'Q-Fractal Generation', en: 'Q-Fractal Generation' },
+    desc: {
+      vi: 'Cây fractal ngẫu nhiên trong R². Gốc = (0,0). Mỗi nút sinh K con ' +
+          'nằm trên đường tròn bán kính 1, mỗi con ở một cung 2π/K khác nhau (góc ngẫu nhiên trong cung). ' +
+          'Mọi cạnh cây đều là cặp khoảng cách = 1, cộng thêm cặp xuyên nhánh tình cờ. ' +
+          'α lý thuyết ≈ 1 (từ cấu trúc cây). Reset để thấy thực nghiệm khác nhau do ngẫu nhiên.',
+      en: 'Random fractal tree in R². Root = (0,0). Each node spawns K children ' +
+          'on a unit circle, one per 2π/K arc (random angle within arc). ' +
+          'All tree edges are unit-distance pairs; extra cross-branch coincidences also counted. ' +
+          'Theoretical α ≈ 1 (from tree structure). Reset to see different random realisations.',
+    },
+    header: 'max pairs at distance 1 — Q-Fractal random tree',
+  },
 ];
 
 // ══════════════════════════════════════════════════════════════════
@@ -938,6 +975,7 @@ const LANG = {
     secInfo:      'Thông tin phương pháp',
     mc1Sub:       'Mạng lục giác · 6 hàng xóm · ν(n) ≈ 3n',
     mc2Sub:       'n^{1.014} · tháp class field Golod-Shafarevich',
+    mc3Sub:       'Cây fractal · K nhánh · mỗi nhánh 1 điểm/cung 2π/K',
     ctrlNPts:     'N điểm',
     ctrlMaxN:     'tối đa 10 tỷ',
     ctrlSpeed:    'Tốc độ (đ/s)',
@@ -968,9 +1006,11 @@ const LANG = {
     chartLabel:   'Log-Log: n vs ν(n) và các đường lý thuyết',
     layerNameFn:  (j, P) => `Tầng ${j+1}: Z[ω]×${getLayerScaleStr(j, P)}`,
     selLabel:     n => `${n} điểm d=1`,
-    secOpenAICfg: 'Cấu hình OpenAI',
-    ctrlPrime:    'Số nguyên tố P',
-    ctrlLayers:   'Số tầng',
+    secOpenAICfg:    'Cấu hình OpenAI',
+    ctrlPrime:       'Số nguyên tố P',
+    ctrlLayers:      'Số tầng',
+    secQFractalCfg:  'Cấu hình Q-Fractal',
+    ctrlBranch:      'Nhánh K',
     primeOK:      '≡1(mod 3) ✓',
     primeWarn:    p => `≡${p%3}(mod 3) ⚠`,
     primeErr:     'Không phải SNT ✗',
@@ -984,6 +1024,7 @@ const LANG = {
     dsSquare:     'Lưới Vuông (đo)',
     dsEisen:      'CM Eisenstein (đo)',
     dsOpenAI:     'OpenAI CM (đo)',
+    dsQFractal:   'Q-Fractal (đo)',
     dsErdos:      'Erdős n^{1+c/lnln(n)} (tiệm cận)',
     dsOpenAICurve:'OpenAI n^{1.014}',
     dsST:         'S-T bound n^{4/3}',
@@ -997,6 +1038,7 @@ const LANG = {
     secInfo:      'Method Info',
     mc1Sub:       'Hexagonal lattice · 6 neighbors · ν(n) ≈ 3n',
     mc2Sub:       'n^{1.014} · Golod-Shafarevich class field tower',
+    mc3Sub:       'Fractal tree · K branches · one point per 2π/K arc',
     ctrlNPts:     'N points',
     ctrlMaxN:     'max 10 billion',
     ctrlSpeed:    'Speed (pt/s)',
@@ -1027,9 +1069,11 @@ const LANG = {
     chartLabel:   'Log-Log: n vs ν(n) and theory curves',
     layerNameFn:  (j, P) => `Layer ${j+1}: Z[ω]×${getLayerScaleStr(j, P)}`,
     selLabel:     n => `${n} pts d=1`,
-    secOpenAICfg: 'OpenAI Config',
-    ctrlPrime:    'Prime P',
-    ctrlLayers:   'Layers',
+    secOpenAICfg:    'OpenAI Config',
+    ctrlPrime:       'Prime P',
+    ctrlLayers:      'Layers',
+    secQFractalCfg:  'Q-Fractal Config',
+    ctrlBranch:      'Branches K',
     primeOK:      '≡1(mod 3) ✓',
     primeWarn:    p => `≡${p%3}(mod 3) ⚠`,
     primeErr:     'Not prime ✗',
@@ -1043,6 +1087,7 @@ const LANG = {
     dsSquare:     'Square Grid (data)',
     dsEisen:      'CM Eisenstein (data)',
     dsOpenAI:     'OpenAI CM (data)',
+    dsQFractal:   'Q-Fractal (data)',
     dsErdos:      'Erdős n^{1+c/lnln(n)} (asymptotic)',
     dsOpenAICurve:'OpenAI n^{1.014}',
     dsST:         'S-T bound n^{4/3}',
@@ -1056,7 +1101,53 @@ const LANG = {
 function generateAllPoints(method, maxN) {
   if (method === 0) return generateSquareGrid(maxN);
   if (method === 1) return generateEisenstein(maxN);
-  return generateOpenAI(maxN);
+  if (method === 2) return generateOpenAI(maxN);
+  return generateQFractal(maxN);
+}
+
+// ══════════════════════════════════════════════════════════════════
+//  Q-FRACTAL GENERATION
+//  BFS fractal tree: each node → K children on unit circle,
+//  one per angular sector of size 2π/K (random angle within sector)
+// ══════════════════════════════════════════════════════════════════
+function generateQFractal(maxN) {
+  const K = state.qK;
+  const SECTOR = (2 * Math.PI) / K;
+  const PREC   = 1e4;  // position dedup precision
+
+  const pts    = [];   // {x, y, layer (=depth), parentIdx}
+  const posMap = new Map();
+
+  function posKey(x, y) {
+    return `${Math.round(x * PREC)},${Math.round(y * PREC)}`;
+  }
+  function addPt(x, y, depth, parentIdx) {
+    const k = posKey(x, y);
+    if (posMap.has(k)) return -1;
+    const idx = pts.length;
+    pts.push({ x, y, a: Math.round(x * PREC), b: Math.round(y * PREC),
+               layer: depth, parentIdx });
+    posMap.set(k, idx);
+    return idx;
+  }
+
+  // BFS queue stores node indices
+  addPt(0, 0, 0, -1);
+  let qi = 0;
+
+  while (pts.length < maxN && qi < pts.length) {
+    const { x, y, layer } = pts[qi];
+    for (let j = 0; j < K; j++) {
+      if (pts.length >= maxN) break;
+      const angle = j * SECTOR + Math.random() * SECTOR;
+      const nx = x + Math.cos(angle);
+      const ny = y + Math.sin(angle);
+      addPt(nx, ny, layer + 1, qi);
+    }
+    qi++;
+  }
+
+  return pts.slice(0, maxN);
 }
 
 function generateSquareGrid(maxN) {
@@ -1207,7 +1298,7 @@ function maxUsefulLayers(n, P) {
 // OpenAI:        ν(n) ~ A·n^{1.014}  →  α = 1.014 (hằng số lý thuyết từ bài báo)
 function analyticalAlpha(method /*, n unused */) {
   if (method === 2) return 1.014;
-  return 1.0;   // Vuông và Eisenstein đều tiệm cận α = 1
+  return 1.0;   // Vuông, Eisenstein, Q-Fractal đều tiệm cận α → 1
 }
 
 function theoryLinePoints(fn, min = 10, max = 10000000000, steps = 100) {
@@ -1259,6 +1350,14 @@ function initChart() {
           label: LANG.vi.dsOpenAI,
           data: chartData[2],
           backgroundColor: COLORS.orange + 'bb',
+          pointRadius: 3,
+          pointHoverRadius: 5,
+          showLine: false,
+        },
+        {
+          label: LANG.vi.dsQFractal,
+          data: chartData[3],
+          backgroundColor: '#ff6b9dbb',
           pointRadius: 3,
           pointHoverRadius: 5,
           showLine: false,
@@ -2161,7 +2260,7 @@ function updateInfoBox(method) {
 }
 
 function updateMethodCards(method) {
-  for (let i = 0; i < 3; i++) {
+  for (let i = 0; i < 4; i++) {
     document.getElementById(`card-${i}`).classList.toggle('active', i === method);
   }
 }
@@ -2212,9 +2311,9 @@ function selectMethod(m) {
   state.method = m;
   updateMethodCards(m);
   updateInfoBox(m);
-  // Show OpenAI config panel only for method 2
-  const cfg = document.getElementById('openai-cfg');
-  if (cfg) cfg.style.display = m === 2 ? '' : 'none';
+  document.getElementById('openai-cfg').style.display    = m === 2 ? '' : 'none';
+  document.getElementById('qfractal-cfg').style.display  = m === 3 ? '' : 'none';
+  if (m === 3) updateQFractalInfo();
   doReset();
 }
 
@@ -2305,6 +2404,85 @@ function addNextPoint(now) {
   }
 }
 
+// ══════════════════════════════════════════════════════════════════
+//  Q-FRACTAL ALGEBRAIC VIEW  — fractal tree coloured by depth
+// ══════════════════════════════════════════════════════════════════
+function drawAlgQFractal(canvas, points) {
+  const ctx = canvas.getContext('2d');
+  clearCanvas(ctx);
+  if (!points.length) return;
+
+  const W = canvas.width, H = canvas.height;
+  const cx = W / 2 + view3d.panX;
+  const cy = H / 2 + view3d.panY;
+
+  // Compute bounding box to set scale
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+  }
+  const span  = Math.max(maxX - minX, maxY - minY, 1);
+  const midX  = (minX + maxX) / 2, midY = (minY + maxY) / 2;
+  const scale = view3d.zoom * Math.min(W, H) / (span * 1.2 + 2);
+
+  function toC(x, y) {
+    return [cx + (x - midX) * scale, cy - (y - midY) * scale];
+  }
+
+  const maxDepth = points.reduce((m, p) => Math.max(m, p.layer), 0) || 1;
+
+  // Draw tree edges (parent→child)
+  ctx.lineWidth = Math.max(0.4, 1.2 / view3d.zoom);
+  for (let i = 1; i < points.length; i++) {
+    const p = points[i];
+    if (p.parentIdx == null || p.parentIdx < 0) continue;
+    const par = points[p.parentIdx];
+    if (!par) continue;
+    const hue = (p.layer / (maxDepth + 1)) * 300; // 0=red → 300=violet
+    ctx.strokeStyle = `hsla(${hue},80%,60%,0.35)`;
+    const [x1, y1] = toC(par.x, par.y);
+    const [x2, y2] = toC(p.x, p.y);
+    ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+  }
+
+  // Draw nodes
+  const r = Math.max(1.5, Math.min(5, 60 / Math.sqrt(points.length + 1)));
+  for (const p of points) {
+    const [px, py] = toC(p.x, p.y);
+    const hue = (p.layer / (maxDepth + 1)) * 300;
+    ctx.fillStyle = `hsl(${hue},90%,65%)`;
+    ctx.beginPath(); ctx.arc(px, py, r / view3d.zoom, 0, 2 * Math.PI);
+    ctx.fill();
+  }
+
+  // Depth legend
+  ctx.font = '10px monospace';
+  ctx.fillStyle = '#6070a0';
+  ctx.fillText(`depth 0–${maxDepth}  |  n=${points.length}  |  K=${state.qK}`, 10, H - 10);
+}
+
+function updateQFractalInfo() {
+  const el = document.getElementById('qfractal-info');
+  if (!el) return;
+  const K = state.qK;
+  const lang = state.lang;
+  const sectorDeg = (360 / K).toFixed(1);
+  const treeEdges = lang === 'vi'
+    ? `Mỗi nút sinh <b>${K} con</b>, mỗi cung <b>${sectorDeg}°</b>. ` +
+      `Cạnh cây = cặp d=1 đảm bảo. Các cặp xuyên nhánh tính thêm.`
+    : `Each node spawns <b>${K} children</b>, sector <b>${sectorDeg}°</b>. ` +
+      `Tree edges = guaranteed d=1 pairs. Cross-branch pairs also counted.`;
+  el.innerHTML = treeEdges;
+}
+
+function onSliderQK(val) {
+  state.qK = +val;
+  document.getElementById('lbl-qk').textContent = val;
+  updateQFractalInfo();
+  doReset();
+}
+
 function drawFrame() {
   const algCanvas  = document.getElementById('canvas-alg');
   const projCanvas = document.getElementById('canvas-proj');
@@ -2318,7 +2496,8 @@ function drawFrame() {
   // Algebraic view
   if (state.method === 0) drawAlgSquare(algCanvas, state.points);
   else if (state.method === 1) drawAlgEisenstein(algCanvas, state.points);
-  else drawAlgOpenAI(algCanvas, state.points, state.pairs);
+  else if (state.method === 2) drawAlgOpenAI(algCanvas, state.points, state.pairs);
+  else drawAlgQFractal(algCanvas, state.points);
 
   // 2D projection
   drawProjection(projCanvas, state.points, state.pairs, state.flashes, state.method);
@@ -2631,9 +2810,10 @@ function applyLang(lang) {
     chart.data.datasets[0].label = L.dsSquare;
     chart.data.datasets[1].label = L.dsEisen;
     chart.data.datasets[2].label = L.dsOpenAI;
-    chart.data.datasets[3].label = L.dsErdos;
-    chart.data.datasets[4].label = L.dsOpenAICurve;
-    chart.data.datasets[5].label = L.dsST;
+    chart.data.datasets[3].label = L.dsQFractal;
+    chart.data.datasets[4].label = L.dsErdos;
+    chart.data.datasets[5].label = L.dsOpenAICurve;
+    chart.data.datasets[6].label = L.dsST;
     chart.options.scales.x.title.text = L.chartX;
     chart.options.scales.y.title.text = L.chartY;
     chart.update('none');

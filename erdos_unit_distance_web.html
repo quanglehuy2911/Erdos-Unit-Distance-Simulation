@@ -1109,9 +1109,8 @@ function generateAllPoints(method, maxN) {
 //  No randomness; deterministic and fully reproducible.
 // ══════════════════════════════════════════════════════════════════
 function generateQFractal(maxN) {
-  const K_HARD  = 60;   // absolute ceiling on children per node
-  const D_MIN2  = 0.64; // (0.8)² — min squared-distance between any two points
-  const N_CAND  = 72;   // base evenly-spaced evaluation grid (5° resolution)
+  const K_HARD = 60;  // absolute ceiling on children per node
+  const N_CAND = 72;  // base evenly-spaced evaluation grid (5° resolution)
   const PREC   = 1e4;         // position dedup precision
   const TWO_PI = 2 * Math.PI;
 
@@ -1257,17 +1256,13 @@ function generateQFractal(maxN) {
     for (const θ of cands) {
       const cx = x + Math.cos(θ), cy = y + Math.sin(θ);
       if (posMap.has(posKey(cx, cy))) continue;
-      let pairs = 0, minD2 = Infinity, tooClose = false;
+      let pairs = 0, minD2 = Infinity;
       for (const ni of nearby) {
         const q = pts[ni];
         const ddx = cx - q.x, ddy = cy - q.y, d2 = ddx * ddx + ddy * ddy;
         if (Math.abs(d2 - 1.0) < EPS) pairs++;
-        if (ni !== qi) {
-          if (d2 < D_MIN2) { tooClose = true; break; } // too close — skip
-          if (d2 < minD2) minD2 = d2;
-        }
+        if (ni !== qi && d2 < minD2) minD2 = d2;
       }
-      if (tooClose) continue;
       scored.push({ θ, pairs, minD2: minD2 === Infinity ? 0 : minD2 });
     }
     scored.sort((a, b) => b.pairs - a.pairs || b.minD2 - a.minD2);

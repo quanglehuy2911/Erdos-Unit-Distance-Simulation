@@ -1289,13 +1289,21 @@ function generateQFractal(maxN, rmax) {
     return [alpha + beta, alpha - beta];
   }
 
+  // Count how many placed points are at unit distance from (cx, cy)
+  function countPairs(cx, cy) {
+    const nb = lhNearby(cx, cy);
+    let count = 0;
+    for (const ni of nb) {
+      const q = pts[ni];
+      const ddx = cx - q.x, ddy = cy - q.y;
+      if (Math.abs(ddx * ddx + ddy * ddy - 1.0) < EPS) count++;
+    }
+    return count;
+  }
+
   // ── Candidate heap: min-heap keyed by composite score ────────────
   // Key = d2 − pe * 1e9 :  positions with more unit-distance connections
   // (pe) come first; ties broken by proximity to origin (d2).
-  // Strategy: push with cheap static pe (O(1)), correct at pop time.
-  //   pe = 0  grid samples  |  pe = 2  cross-angle (analytically guaranteed)
-  // At pop time: if actual pairs > pe_est, re-insert with correct pe so
-  // the candidate gets proper priority — O(1) re-insert, preserves quality.
   const heap     = [];
   const heapKeys = new Map(); // posKey → best key seen so far
 
@@ -1308,7 +1316,7 @@ function generateQFractal(maxN, rmax) {
     const existing = heapKeys.get(k);
     if (existing !== undefined && existing <= key) return;
     heapKeys.set(k, key);
-    heap.push({ cx, cy, key, pe: pe || 0 });   // store pe for pop-time check
+    heap.push({ cx, cy, key });
     let i = heap.length - 1;
     while (i > 0) {
       const p = (i - 1) >> 1;
@@ -1332,16 +1340,21 @@ function generateQFractal(maxN, rmax) {
     return min;
   }
 
-  // Enqueue: O(1) pe estimate per push — no countPairs scan.
+  // Enqueue: pe = countPairs at push time → accurate greedy ordering.
   function enqueue(px, py) {
-    for (let i = 0; i < N_CAND; i++)
-      hPush(px + Math.cos(TWO_PI * i / N_CAND),
-            py + Math.sin(TWO_PI * i / N_CAND), 0);
+    for (let i = 0; i < N_CAND; i++) {
+      const cx = px + Math.cos(TWO_PI * i / N_CAND);
+      const cy = py + Math.sin(TWO_PI * i / N_CAND);
+      hPush(cx, cy, countPairs(cx, cy));
+    }
     const nb = lhNearby(px, py);
     for (const ni of nb) {
       const q = pts[ni];
-      for (const θ of crossAngles(px, py, q.x, q.y))
-        hPush(px + Math.cos(θ), py + Math.sin(θ), 2);
+      for (const θ of crossAngles(px, py, q.x, q.y)) {
+        const cx = px + Math.cos(θ);
+        const cy = py + Math.sin(θ);
+        hPush(cx, cy, countPairs(cx, cy));
+      }
     }
   }
 
@@ -1350,13 +1363,12 @@ function generateQFractal(maxN, rmax) {
   enqueue(0, 0);
 
   while (pts.length < maxN && heap.length > 0) {
-    const { cx, cy, key, pe: pe_est } = hPop();
+    const { cx, cy, key } = hPop();
     const k = posKey(cx, cy);
     if (posMap.has(k)) continue;              // already placed
     if (heapKeys.get(k) !== key) continue;    // superseded by a better-scored entry
     heapKeys.delete(k);
 
-    // Count actual unit-distance neighbours and check d_min
     const nb = lhNearby(cx, cy);
     let pairs = 0, parentIdx = -1, parentD2 = Infinity, tooClose = false;
     for (const ni of nb) {
@@ -1369,10 +1381,6 @@ function generateQFractal(maxN, rmax) {
       }
     }
     if (tooClose || pairs === 0) continue;
-
-    // Lazy priority correction: if actual pairs exceeds the static estimate,
-    // re-insert with the true pe so this position gets proper heap priority.
-    if (pairs > pe_est) { hPush(cx, cy, pairs); continue; }
 
     const depth = parentIdx >= 0 ? pts[parentIdx].layer + 1 : 0;
     if (addPt(cx, cy, depth, parentIdx) !== -1) enqueue(cx, cy);
@@ -1455,6 +1463,17 @@ async function generateQFractalAsync(maxN, rmax, genId) {
     const alpha = Math.atan2(dy, dx);
     return [alpha + beta, alpha - beta];
   }
+  function countPairs(cx, cy) {
+    const nb = lhNearby(cx, cy);
+    let count = 0;
+    for (const ni of nb) {
+      const q = pts[ni];
+      const ddx = cx - q.x, ddy = cy - q.y;
+      if (Math.abs(ddx * ddx + ddy * ddy - 1.0) < EPS) count++;
+    }
+    return count;
+  }
+
   const heap     = [];
   const heapKeys = new Map();
   function hPush(cx, cy, pe) {
@@ -1466,7 +1485,7 @@ async function generateQFractalAsync(maxN, rmax, genId) {
     const existing = heapKeys.get(k);
     if (existing !== undefined && existing <= key) return;
     heapKeys.set(k, key);
-    heap.push({ cx, cy, key, pe: pe || 0 });    // store pe for pop-time check
+    heap.push({ cx, cy, key });
     let i = heap.length - 1;
     while (i > 0) {
       const p = (i - 1) >> 1;
@@ -1489,16 +1508,21 @@ async function generateQFractalAsync(maxN, rmax, genId) {
     }
     return min;
   }
-  // Enqueue: O(1) pe estimate per push — no countPairs scan.
+  // Enqueue: pe = countPairs at push time → accurate greedy ordering.
   function enqueue(px, py) {
-    for (let i = 0; i < N_CAND; i++)
-      hPush(px + Math.cos(TWO_PI * i / N_CAND),
-            py + Math.sin(TWO_PI * i / N_CAND), 0);
+    for (let i = 0; i < N_CAND; i++) {
+      const cx = px + Math.cos(TWO_PI * i / N_CAND);
+      const cy = py + Math.sin(TWO_PI * i / N_CAND);
+      hPush(cx, cy, countPairs(cx, cy));
+    }
     const nb = lhNearby(px, py);
     for (const ni of nb) {
       const q = pts[ni];
-      for (const θ of crossAngles(px, py, q.x, q.y))
-        hPush(px + Math.cos(θ), py + Math.sin(θ), 2);
+      for (const θ of crossAngles(px, py, q.x, q.y)) {
+        const cx = px + Math.cos(θ);
+        const cy = py + Math.sin(θ);
+        hPush(cx, cy, countPairs(cx, cy));
+      }
     }
   }
 
@@ -1515,7 +1539,7 @@ async function generateQFractalAsync(maxN, rmax, genId) {
   let lastYield = performance.now();
 
   while (pts.length < maxN && heap.length > 0) {
-    const { cx, cy, key, pe: pe_est } = hPop();
+    const { cx, cy, key } = hPop();
     const k = posKey(cx, cy);
     if (posMap.has(k)) continue;
     if (heapKeys.get(k) !== key) continue;
@@ -1533,9 +1557,6 @@ async function generateQFractalAsync(maxN, rmax, genId) {
       }
     }
     if (tooClose || pairs === 0) continue;
-
-    // Lazy priority correction: re-insert with true pe if underestimated.
-    if (pairs > pe_est) { hPush(cx, cy, pairs); continue; }
 
     const depth = parentIdx >= 0 ? pts[parentIdx].layer + 1 : 0;
     if (addPt(cx, cy, depth, parentIdx) !== -1) enqueue(cx, cy);

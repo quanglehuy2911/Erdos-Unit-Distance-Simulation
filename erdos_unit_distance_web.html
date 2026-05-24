@@ -415,6 +415,68 @@
     border-radius: var(--radius) !important;
   }
 
+  /* ── Q-Fractal computation overlay ── */
+  #qf-overlay {
+    display: none;
+    position: absolute;
+    inset: 0;
+    z-index: 50;
+    background: rgba(6,6,15,0.82);
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(3px);
+  }
+  #qf-overlay.show { display: flex; }
+  #qf-progress-box {
+    background: var(--panel);
+    border: 1px solid var(--pink);
+    border-radius: 12px;
+    padding: 28px 36px;
+    min-width: 300px;
+    text-align: center;
+    box-shadow: 0 0 50px rgba(255,107,157,0.15);
+  }
+  #qf-ov-phase {
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+  #qf-ov-pts {
+    font-size: 28px;
+    font-weight: 900;
+    color: var(--pink);
+    font-variant-numeric: tabular-nums;
+    margin-bottom: 2px;
+  }
+  #qf-ov-sub {
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 16px;
+  }
+  #qf-ov-bar-bg {
+    height: 6px;
+    border-radius: 3px;
+    background: var(--border);
+    overflow: hidden;
+    margin-bottom: 8px;
+  }
+  #qf-ov-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, var(--purple), var(--pink));
+    border-radius: 3px;
+    transition: width 0.12s ease;
+  }
+  #qf-ov-pct {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+
   /* ── Large-N warning popup ── */
   #large-n-backdrop {
     display: none;
@@ -654,6 +716,20 @@
 
   <!-- CONTENT -->
   <div id="content">
+
+    <!-- Q-Fractal computation progress overlay -->
+    <div id="qf-overlay">
+      <div id="qf-progress-box">
+        <div id="qf-ov-phase">Chuẩn bị...</div>
+        <div id="qf-ov-pts">0</div>
+        <div id="qf-ov-sub">/ 0 điểm</div>
+        <div id="qf-ov-bar-bg">
+          <div id="qf-ov-bar"></div>
+        </div>
+        <div id="qf-ov-pct">0%</div>
+      </div>
+    </div>
+
     <div id="canvas-row">
       <div class="canvas-wrap" id="alg-wrap">
         <div class="canvas-label" data-i18n="algLabel">Không gian đại số — kéo: pan · cuộn: zoom · (OpenAI) phải/Shift: pan, trái: xoay · dbl: reset</div>
@@ -889,6 +965,7 @@ let state = {
   numLayers: 3,      // số tầng cho OpenAI multi-layer (2–8)
   // qK removed — K is now fully adaptive (K_eff = round(2π·r))
   qRmax: 2.0,    // radius bound for Q-Fractal (all points within |P|≤qRmax)
+  qfGenId: 0,   // incremented on each reset; async generator checks this to self-cancel
 };
 
 // Cache vị trí screen (canvas px) của mỗi điểm sau mỗi lần vẽ — dùng cho click detection
@@ -1314,6 +1391,190 @@ function generateQFractal(maxN, rmax) {
 
     const depth = parentIdx >= 0 ? pts[parentIdx].layer + 1 : 0;
     if (addPt(cx, cy, depth, parentIdx) !== -1) enqueue(cx, cy);
+  }
+
+  return pts.slice(0, maxN);
+}
+
+// ── Progress overlay helpers ────────────────────────────────────────
+const _QF_PHASE_LABELS = {
+  vi: { preparing: 'Chuẩn bị...', computing: 'Đang tính toán...' },
+  en: { preparing: 'Preparing...',  computing: 'Computing...' },
+};
+function showQFOverlay(pct, n, maxN, phase) {
+  const el = document.getElementById('qf-overlay');
+  if (!el) return;
+  el.classList.add('show');
+  const L = _QF_PHASE_LABELS[state.lang] || _QF_PHASE_LABELS.vi;
+  document.getElementById('qf-ov-phase').textContent = L[phase] || L.computing;
+  document.getElementById('qf-ov-pts').textContent   = fmtN(n);
+  const lbl = state.lang === 'en' ? ' points' : ' điểm';
+  document.getElementById('qf-ov-sub').textContent   = '/ ' + fmtN(maxN) + lbl;
+  const pctInt = Math.min(100, Math.round(pct * 100));
+  document.getElementById('qf-ov-bar').style.width   = pctInt + '%';
+  document.getElementById('qf-ov-pct').textContent   = pctInt + '%';
+}
+function hideQFOverlay() {
+  const el = document.getElementById('qf-overlay');
+  if (el) el.classList.remove('show');
+}
+
+// ── Async Q-Fractal generator (same algorithm as generateQFractal but
+//    yields to the browser every ~16 ms so progress can be rendered) ──
+async function generateQFractalAsync(maxN, rmax, genId) {
+  const RMAX    = (rmax > 0) ? rmax : 1.0;
+  const RMAX2   = RMAX * RMAX;
+  const d_min   = Math.max(0.03, 0.9 * 2 * RMAX / Math.sqrt(Math.max(1, maxN)));
+  const D_MIN2  = d_min * d_min;
+  const N_CAND  = Math.max(24, Math.min(120, Math.ceil(2 * Math.PI / d_min)));
+  const PREC    = 1e4;
+  const TWO_PI  = 2 * Math.PI;
+
+  const pts    = [];
+  const posMap = new Map();
+  const localHash = new Map();
+
+  function lhKey(ix, iy) { return `${ix},${iy}`; }
+  function lhAdd(idx, x, y) {
+    const k = lhKey(Math.floor(x), Math.floor(y));
+    let cell = localHash.get(k);
+    if (!cell) { cell = []; localHash.set(k, cell); }
+    cell.push(idx);
+  }
+  function lhNearby(x, y) {
+    const result = [];
+    const gx = Math.floor(x), gy = Math.floor(y);
+    for (let ddx = -2; ddx <= 2; ddx++)
+      for (let ddy = -2; ddy <= 2; ddy++) {
+        const cell = localHash.get(lhKey(gx + ddx, gy + ddy));
+        if (cell) for (const i of cell) result.push(i);
+      }
+    return result;
+  }
+  function posKey(x, y) { return `${Math.round(x * PREC)},${Math.round(y * PREC)}`; }
+  function addPt(x, y, depth, parentIdx) {
+    const k = posKey(x, y);
+    if (posMap.has(k)) return -1;
+    const idx = pts.length;
+    pts.push({ x, y, a: Math.round(x * PREC), b: Math.round(y * PREC), layer: depth, parentIdx });
+    posMap.set(k, idx);
+    lhAdd(idx, x, y);
+    return idx;
+  }
+  function crossAngles(px, py, qx, qy) {
+    const dx = px - qx, dy = py - qy;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < 1e-9 || d2 > 4.0 + 1e-9) return [];
+    const d = Math.sqrt(d2);
+    const beta  = Math.acos(Math.max(-1, Math.min(1, -d / 2)));
+    const alpha = Math.atan2(dy, dx);
+    return [alpha + beta, alpha - beta];
+  }
+  function countPairs(cx, cy) {
+    const nb = lhNearby(cx, cy);
+    let count = 0;
+    for (const ni of nb) {
+      const q = pts[ni];
+      const ddx = cx - q.x, ddy = cy - q.y;
+      if (Math.abs(ddx * ddx + ddy * ddy - 1.0) < EPS) count++;
+    }
+    return count;
+  }
+
+  const heap     = [];
+  const heapKeys = new Map();
+  function hPush(cx, cy, pe) {
+    if (cx * cx + cy * cy > RMAX2 + 1e-9) return;
+    const k = posKey(cx, cy);
+    if (posMap.has(k)) return;
+    const d2  = cx * cx + cy * cy;
+    const key = d2 - (pe || 0) * 1e9;
+    const existing = heapKeys.get(k);
+    if (existing !== undefined && existing <= key) return;
+    heapKeys.set(k, key);
+    heap.push({ cx, cy, key });
+    let i = heap.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (heap[p].key <= heap[i].key) break;
+      [heap[p], heap[i]] = [heap[i], heap[p]]; i = p;
+    }
+  }
+  function hPop() {
+    if (heap.length === 1) return heap.pop();
+    const min = heap[0];
+    heap[0] = heap.pop();
+    let i = 0;
+    for (;;) {
+      const l = 2 * i + 1, r = 2 * i + 2;
+      let s = i;
+      if (l < heap.length && heap[l].key < heap[s].key) s = l;
+      if (r < heap.length && heap[r].key < heap[s].key) s = r;
+      if (s === i) break;
+      [heap[i], heap[s]] = [heap[s], heap[i]]; i = s;
+    }
+    return min;
+  }
+  function enqueue(px, py) {
+    for (let i = 0; i < N_CAND; i++) {
+      const cx = px + Math.cos(TWO_PI * i / N_CAND);
+      const cy = py + Math.sin(TWO_PI * i / N_CAND);
+      hPush(cx, cy, countPairs(cx, cy));
+    }
+    const nb = lhNearby(px, py);
+    for (const ni of nb) {
+      const q = pts[ni];
+      for (const θ of crossAngles(px, py, q.x, q.y)) {
+        const cx = px + Math.cos(θ);
+        const cy = py + Math.sin(θ);
+        hPush(cx, cy, countPairs(cx, cy));
+      }
+    }
+  }
+
+  // ── Setup ──
+  showQFOverlay(0, 0, maxN, 'preparing');
+  await new Promise(r => setTimeout(r, 0));          // yield → browser shows overlay
+  if (state.qfGenId !== genId) return null;          // cancelled
+
+  addPt(0, 0, 0, -1);
+  enqueue(0, 0);
+  showQFOverlay(0, 0, maxN, 'computing');
+
+  // ── Main loop with periodic yield ────────────────────────────────
+  let lastYield = performance.now();
+
+  while (pts.length < maxN && heap.length > 0) {
+    const { cx, cy, key } = hPop();
+    const k = posKey(cx, cy);
+    if (posMap.has(k)) continue;
+    if (heapKeys.get(k) !== key) continue;
+    heapKeys.delete(k);
+
+    const nb = lhNearby(cx, cy);
+    let pairs = 0, parentIdx = -1, parentD2 = Infinity, tooClose = false;
+    for (const ni of nb) {
+      const q = pts[ni];
+      const ddx = cx - q.x, ddy = cy - q.y, d2 = ddx * ddx + ddy * ddy;
+      if (d2 < D_MIN2) { tooClose = true; break; }
+      if (Math.abs(d2 - 1.0) < EPS) {
+        pairs++;
+        if (d2 < parentD2) { parentD2 = d2; parentIdx = ni; }
+      }
+    }
+    if (tooClose || pairs === 0) continue;
+
+    const depth = parentIdx >= 0 ? pts[parentIdx].layer + 1 : 0;
+    if (addPt(cx, cy, depth, parentIdx) !== -1) enqueue(cx, cy);
+
+    // Yield to browser every ~16 ms to allow overlay repaint
+    const now = performance.now();
+    if (now - lastYield >= 16) {
+      showQFOverlay(pts.length / maxN, pts.length, maxN, 'computing');
+      await new Promise(r => setTimeout(r, 0));
+      if (state.qfGenId !== genId) return null;      // cancelled by new reset
+      lastYield = performance.now();
+    }
   }
 
   return pts.slice(0, maxN);
@@ -2445,6 +2706,10 @@ function doReset() {
   document.getElementById('btn-play').classList.remove('playing');
   hideTheoryOverlay();
 
+  // Cancel any in-progress Q-Fractal async generation
+  state.qfGenId++;
+  hideQFOverlay();
+
   state.points = [];
   state.pairs  = [];
   state.flashes = [];
@@ -2456,12 +2721,11 @@ function doReset() {
   spatialHash = new Map();
 
   if (state.maxN > RENDER_THRESHOLD) {
-    // Theory-only mode: show a small sample visually, compute ν by formula
+    // Theory-only mode: small sample visually, ν by formula
     const sampleN = Math.min(500, RENDER_THRESHOLD);
     allPoints = [];
     const samplePts = generateAllPoints(state.method, sampleN);
     state.points = samplePts;
-    // Find all pairs for the sample (seed point 0 into hash, then process 1..n-1)
     if (samplePts.length > 0) _shAdd(0, samplePts[0]);
     for (let i = 1; i < samplePts.length; i++) {
       const newPs = findNewPairs(state.points, i);
@@ -2469,6 +2733,18 @@ function doReset() {
     }
     drawFrame();
     runTheoryMode(state.method, state.maxN);
+
+  } else if (state.method === 3) {
+    // Q-Fractal: run asynchronously with progress overlay
+    const genId = state.qfGenId;
+    generateQFractalAsync(state.maxN, state.qRmax, genId).then(pts => {
+      if (pts === null || state.qfGenId !== genId) return;  // cancelled
+      hideQFOverlay();
+      allPoints = pts;
+      updateUI();
+      drawFrame();
+    });
+
   } else {
     allPoints = generateAllPoints(state.method, state.maxN);
     updateUI();

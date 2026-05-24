@@ -397,12 +397,31 @@
     padding: 4px 6px;
     line-height: 1;
     display: flex; align-items: center; justify-content: center;
+    gap: 5px;
+    font-size: 11px;
     transition: color .15s, border-color .15s, background .15s;
   }
   .expand-btn:hover {
     color: var(--fg);
     border-color: #5060a0;
     background: rgba(30,40,80,0.9);
+  }
+  /* Collapse button is bigger and labelled when panel is open */
+  .expand-btn.is-expanded {
+    top: 10px; right: 12px;
+    padding: 6px 12px;
+    background: rgba(20,26,60,0.92);
+    border-color: #5060a0;
+    color: var(--fg);
+    font-weight: 600;
+    font-size: 12px;
+    border-radius: 7px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
+  }
+  .expand-btn.is-expanded:hover {
+    background: rgba(40,50,100,0.95);
+    border-color: var(--cyan);
+    color: var(--cyan);
   }
   /* Expanded panel covers all of #content */
   .panel-expanded {
@@ -2684,6 +2703,16 @@ let expandedPanel = null;   // 'alg' | 'proj' | 'chart' | null
 const SVG_EXPAND   = `<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4.5V1H4.5M8.5 1H12V4.5M12 8.5V12H8.5M4.5 12H1V8.5"/></svg>`;
 const SVG_COLLAPSE = `<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 1V4.5H1M12 4.5H8.5V1M8.5 12V8.5H12M1 8.5H4.5V12"/></svg>`;
 
+function _collapsePanel(id) {
+  const wrapId = id === 'chart' ? 'chart-wrap' : id + '-wrap';
+  document.getElementById(wrapId).classList.remove('panel-expanded');
+  const btn = document.getElementById('expand-' + id);
+  btn.classList.remove('is-expanded');
+  btn.innerHTML = SVG_EXPAND;
+  btn.title = state.lang === 'vi' ? 'Mở rộng' : 'Expand';
+  expandedPanel = null;
+}
+
 function toggleExpand(id) {
   const wrapId  = id === 'chart' ? 'chart-wrap' : id + '-wrap';
   const wrap    = document.getElementById(wrapId);
@@ -2691,36 +2720,33 @@ function toggleExpand(id) {
   const isOpen  = expandedPanel === id;
 
   // Collapse whatever is currently expanded
-  if (expandedPanel) {
-    const prevId   = expandedPanel;
-    const prevWrap = document.getElementById(prevId === 'chart' ? 'chart-wrap' : prevId + '-wrap');
-    prevWrap.classList.remove('panel-expanded');
-    document.getElementById('expand-' + prevId).innerHTML = SVG_EXPAND;
-    document.getElementById('expand-' + prevId).title =
-      state.lang === 'vi' ? 'Mở rộng' : 'Expand';
-    expandedPanel = null;
-  }
+  if (expandedPanel) _collapsePanel(expandedPanel);
 
   if (!isOpen) {
     wrap.classList.add('panel-expanded');
-    btn.innerHTML = SVG_COLLAPSE;
-    btn.title = state.lang === 'vi' ? 'Thu nhỏ' : 'Collapse';
+    btn.classList.add('is-expanded');
+    const collapseLabel = state.lang === 'vi' ? 'Thu nhỏ  Esc' : 'Collapse  Esc';
+    btn.innerHTML = SVG_COLLAPSE + `<span>${collapseLabel}</span>`;
+    btn.title = state.lang === 'vi' ? 'Thu nhỏ (hoặc nhấn Esc)' : 'Collapse (or press Esc)';
     expandedPanel = id;
   }
 
   // Trigger layout / redraw at new size (rAF so DOM has time to reflow)
   requestAnimationFrame(() => {
-    if (id !== 'chart' || isOpen) {
-      resizeCanvas(document.getElementById('canvas-alg'));
-      resizeCanvas(document.getElementById('canvas-proj'));
-      drawFrame();
-    }
+    resizeCanvas(document.getElementById('canvas-alg'));
+    resizeCanvas(document.getElementById('canvas-proj'));
+    drawFrame();
     if (typeof chart !== 'undefined' && chart) chart.resize();
   });
 
   // Restore normal layout when collapsing
   if (isOpen) doLayout();
 }
+
+// Press Esc to collapse any expanded panel
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && expandedPanel) toggleExpand(expandedPanel);
+});
 
 // ══════════════════════════════════════════════════════════════════
 //  LARGE-N WARNING POPUP

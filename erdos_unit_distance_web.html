@@ -1115,13 +1115,14 @@ function generateAllPoints(method, maxN) {
 //  4. Repeat until n points placed.
 //
 //  "K" emerges naturally: the unit circle has circumference 2π, and
-//  with N_CAND=60 we sample every 6°. Dense regions self-regulate
-//  via posMap deduplication; no explicit K or sector bookkeeping.
+//  with N_CAND=24 we sample every 15°. D_MIN2=0.49 (d_min=0.7) prevents
+//  dense crowding; spacing self-regulates via posMap dedup + proximity check.
 // ══════════════════════════════════════════════════════════════════
 function generateQFractal(maxN) {
-  const N_CAND = 60;   // unit-circle sampling resolution (6° per step)
-  const PREC   = 1e4;
-  const TWO_PI = 2 * Math.PI;
+  const N_CAND  = 24;    // unit-circle sampling resolution (15° per step)
+  const D_MIN2  = 0.49;  // min² spacing between any two placed points (d_min=0.7)
+  const PREC    = 1e4;
+  const TWO_PI  = 2 * Math.PI;
 
   const pts    = [];           // { x, y, layer, parentIdx }
   const posMap = new Map();
@@ -1246,18 +1247,19 @@ function generateQFractal(maxN) {
     heapKeys.delete(k);
     if (posMap.has(k)) continue;   // stale entry — position taken
 
-    // Must have ≥1 existing point at unit distance (connectivity check)
+    // Check: (a) not too close to any existing point, (b) ≥1 unit-distance neighbour
     const nb = lhNearby(cx, cy);
-    let pairs = 0, parentIdx = -1, parentD2 = Infinity;
+    let pairs = 0, parentIdx = -1, parentD2 = Infinity, tooClose = false;
     for (const ni of nb) {
       const q = pts[ni];
       const ddx = cx - q.x, ddy = cy - q.y, d2 = ddx * ddx + ddy * ddy;
+      if (d2 < D_MIN2) { tooClose = true; break; }          // spacing violation
       if (Math.abs(d2 - 1.0) < EPS) {
         pairs++;
         if (d2 < parentD2) { parentD2 = d2; parentIdx = ni; }
       }
     }
-    if (pairs === 0) continue;     // isolated candidate — skip
+    if (tooClose || pairs === 0) continue;   // reject this candidate
 
     const depth = parentIdx >= 0 ? pts[parentIdx].layer + 1 : 0;
     if (addPt(cx, cy, depth, parentIdx) !== -1) enqueue(cx, cy);
@@ -2575,7 +2577,7 @@ function drawAlgQFractal(canvas, points) {
   // Depth legend
   ctx.font = '10px monospace';
   ctx.fillStyle = '#6070a0';
-  ctx.fillText(`depth 0–${maxDepth}  |  n=${points.length}  |  candidate-pool, no K`, 10, H - 10);
+  ctx.fillText(`depth 0–${maxDepth}  |  n=${points.length}  |  candidate-pool, d_min=0.7`, 10, H - 10);
 }
 
 function updateQFractalInfo() {
@@ -2583,13 +2585,13 @@ function updateQFractalInfo() {
   if (!el) return;
   el.innerHTML = state.lang === 'vi'
     ? `Sinh điểm theo pool ứng viên toàn cục — không có tham số K.<br>` +
-      `Mỗi điểm mới enqueue 60 vị trí chia đều + cross-angle vào heap.<br>` +
-      `Pop vị trí gần gốc nhất → kiểm tra kết nối d=1 → thêm vào tập.<br>` +
-      `Mật độ tự điều chỉnh qua posMap dedup và cross-angle.`
+      `Mỗi điểm mới enqueue 24 vị trí chia đều (15°) + cross-angle vào heap.<br>` +
+      `Pop vị trí gần gốc nhất → kiểm tra d_min=0.7 + kết nối d=1 → thêm vào tập.<br>` +
+      `Mật độ tự điều chỉnh qua posMap dedup và kiểm tra khoảng cách tối thiểu.`
     : `Point-by-point generation via global candidate pool — no K.<br>` +
-      `Each new point enqueues 60 evenly-spaced + cross-angle positions.<br>` +
-      `Pop closest-to-origin candidate → check d=1 connectivity → add.<br>` +
-      `Density self-regulates via posMap dedup and cross-angle scoring.`;
+      `Each new point enqueues 24 evenly-spaced (15°) + cross-angle positions.<br>` +
+      `Pop closest-to-origin candidate → d_min=0.7 spacing + d=1 check → add.<br>` +
+      `Density self-regulates via posMap dedup and minimum spacing constraint.`;
 }
 
 function drawFrame() {

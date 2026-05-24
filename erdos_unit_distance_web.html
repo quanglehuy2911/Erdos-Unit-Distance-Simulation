@@ -1665,32 +1665,40 @@ function drawAlgEisenstein(canvas, points) {
     if (Math.abs(p.b) > maxAB) maxAB = Math.abs(p.b);
   }
   maxAB = Math.max(maxAB, 1);
-  const scale = Math.min(W, H) / (maxAB * 2.6 + 2);
 
-  // Algebraic Cartesian mapping: (a, b) → canvas (b increases upward)
-  const toC = (a, b) => [a * scale + cx, cy - b * scale];
+  // ── Rotated basis: u=(a−b)/√2 (horizontal), v=(a+b)/√2 (vertical) ──
+  // In this basis: Q(a,b)=a²+ab+b² becomes u²/2 + 3v²/2 = R²
+  // → axis-aligned ellipse, semi-major R√2 (horiz), semi-minor R√(2/3) (vert)
+  // The grid lines (a=const, b=const) appear as ±45° diagonals.
+  const SQRT2 = Math.sqrt(2);
+  // Max screen extent: corner (maxAB,−maxAB) → u=maxAB√2
+  const maxExtent = maxAB * SQRT2;
+  const scale = Math.min(W, H) / (maxExtent * 2.6 + 2);
 
-  // ── Rectangular integer-lattice grid ──────────────────────────
+  // Map integer (a,b) → canvas via 45° rotation
+  const toC = (a, b) => [
+    (a - b) / SQRT2 * scale + cx,
+    cy - (a + b) / SQRT2 * scale
+  ];
+
+  // ── Diagonal integer-lattice grid (a=const and b=const lines) ─
   ctx.strokeStyle = '#1a1a3f';
   ctx.lineWidth = 0.6;
   const RG = maxAB + 2;
   for (let i = -RG; i <= RG; i++) {
-    // Vertical lines (constant a)
+    // Lines of constant a (b varies) → NW–SE diagonals
     const [x0, y0] = toC(i, -RG);
     const [x1, y1] = toC(i,  RG);
     ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
-    // Horizontal lines (constant b)
+    // Lines of constant b (a varies) → NE–SW diagonals
     const [x2, y2] = toC(-RG, i);
     const [x3, y3] = toC( RG, i);
     ctx.beginPath(); ctx.moveTo(x2, y2); ctx.lineTo(x3, y3); ctx.stroke();
   }
 
   // ── Norm ellipse: a²+ab+b² = maxAB² ──────────────────────────
-  // Parameterisation derived from completing the square:
-  //   a(t) = maxAB*(cos t − sin t/√3),  b(t) = maxAB*(2/√3)*sin t
-  // Verifiable: Q(a(t),b(t)) = maxAB² for all t.
-  // In Cartesian (a,b) space this traces a √3-aspect-ratio ellipse
-  // tilted 45° — the correct "Eisenstein norm ball" boundary.
+  // With rotated toC the same parametrisation traces a perfectly
+  // axis-aligned ellipse: semi-major = maxAB√2 (horiz), semi-minor = maxAB√(2/3) (vert).
   ctx.beginPath();
   const SQ3 = Math.sqrt(3);
   for (let i = 0; i <= 180; i++) {
@@ -1701,37 +1709,44 @@ function drawAlgEisenstein(canvas, points) {
     if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
   }
   ctx.closePath();
-  ctx.strokeStyle = COLORS.cyan + '44';
+  ctx.strokeStyle = COLORS.cyan + '55';
   ctx.lineWidth = 1;
   ctx.setLineDash([4, 3]);
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // ── Basis vectors ─────────────────────────────────────────────
+  // ── Basis vectors: a and ω shown as 45° arrows ────────────────
   const [ox, oy] = toC(0, 0);
-  const [ax1, ay1] = toC(1, 0);
-  const [bx1, by1] = toC(0, 1);
+  const [ax1, ay1] = toC(1, 0);   // a-vector → NE diagonal
+  const [bx1, by1] = toC(0, 1);   // ω-vector → NW diagonal
 
   ctx.lineWidth = 1.5;
   ctx.strokeStyle = COLORS.cyan + '88';
   ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ax1, ay1); ctx.stroke();
   ctx.fillStyle = COLORS.cyan + '99';
   ctx.font = 'bold 11px monospace';
-  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  ctx.fillText('a', ax1 + 5, ay1);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+  ctx.fillText('a', ax1 + 4, ay1 - 3);
 
   ctx.strokeStyle = COLORS.green + '88';
   ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(bx1, by1); ctx.stroke();
   ctx.fillStyle = COLORS.green + '99';
-  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  ctx.fillText('b (ω)', bx1 + 5, by1);
+  ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
+  ctx.fillText('ω', bx1 - 4, by1 - 3);
 
-  // Ellipse annotation
-  ctx.fillStyle = COLORS.cyan + '66';
+  // ── Axis labels (semi-axes of ellipse) ───────────────────────
+  const semiH = maxAB * SQRT2 * scale;              // horizontal semi-axis px
+  const semiV = maxAB * Math.sqrt(2 / 3) * scale;   // vertical semi-axis px
+  ctx.fillStyle = COLORS.cyan + '77';
   ctx.font = '9px monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('a−b', cx + semiH * 0.55, cy + 12);           // u-axis label
+  ctx.textAlign = 'left';
+  ctx.fillText('a+b', cx + 5, cy - semiV * 0.55);             // v-axis label
+  // Ellipse formula annotation
+  ctx.fillStyle = COLORS.cyan + '55';
   ctx.textAlign = 'center'; ctx.textBaseline = 'top';
-  const [ex, ey] = toC(maxAB * 0.6, -maxAB * 1.1);
-  ctx.fillText('a²+ab+b²=R² (elipse)', ex, ey);
+  ctx.fillText('a²+ab+b²=R²', cx + semiH * 0.35, cy + semiV + 4);
 
   // ── Points ────────────────────────────────────────────────────
   const iz3e = view3d.zoom;

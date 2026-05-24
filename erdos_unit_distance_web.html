@@ -1637,7 +1637,11 @@ function drawAlgSquare(canvas, points) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-//  DRAWING — ALGEBRAIC VIEW: EISENSTEIN (HEXAGONAL)
+//  DRAWING — ALGEBRAIC VIEW: EISENSTEIN (integer (a,b) grid)
+//  Plots points at their abstract Z[ω] coordinates (a, b) on a
+//  Cartesian grid. The selection boundary a²+ab+b²≤R² is an ellipse
+//  (aspect ratio √3, tilted 45°) — NOT a circle. This is the correct
+//  algebraic-space view, analogous to drawAlgSquare for Z[i].
 // ══════════════════════════════════════════════════════════════════
 function drawAlgEisenstein(canvas, points) {
   const ctx = canvas.getContext('2d');
@@ -1651,62 +1655,91 @@ function drawAlgEisenstein(canvas, points) {
   ctx.translate(-W/2, -H/2);
 
   const cx = W / 2, cy = H / 2;
-  const SQ3_2 = Math.sqrt(3) / 2;
 
   if (!points.length) { ctx.restore(); return; }
-  let maxD = 0;
+
+  // Range of integer coordinates (a, b) — can be negative
+  let maxAB = 0;
   for (const p of points) {
-    const d = Math.sqrt(p.x * p.x + p.y * p.y);
-    if (d > maxD) maxD = d;
+    if (Math.abs(p.a) > maxAB) maxAB = Math.abs(p.a);
+    if (Math.abs(p.b) > maxAB) maxAB = Math.abs(p.b);
   }
-  const scale = Math.min(W, H) / (maxD * 2.5 + 2) * (maxD < 0.5 ? 60 : 1);
+  maxAB = Math.max(maxAB, 1);
+  const scale = Math.min(W, H) / (maxAB * 2.6 + 2);
 
-  // Hexagonal grid lines (background)
-  // Canvas y-axis is flipped: canvas_y = cy - world_y * scale
-  const toC = (wx, wy) => [wx * scale + cx, cy - wy * scale];
+  // Algebraic Cartesian mapping: (a, b) → canvas (b increases upward)
+  const toC = (a, b) => [a * scale + cx, cy - b * scale];
 
+  // ── Rectangular integer-lattice grid ──────────────────────────
   ctx.strokeStyle = '#1a1a3f';
   ctx.lineWidth = 0.6;
-  const R = Math.ceil(maxD) + 2;
-  for (let a = -R; a <= R; a++)
-    for (let b = -R; b <= R; b++) {
-      const [x, y] = toC(a + b * 0.5, b * SQ3_2);
-      // Hex tile outline (6 neighbors)
-      const dirs = [[1,0],[0,1],[-1,1],[-1,0],[0,-1],[1,-1]];
-      for (const [da, db] of dirs) {
-        const [nx, ny] = toC((a+da) + (b+db)*0.5, (b+db)*SQ3_2);
-        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(nx, ny); ctx.stroke();
-      }
-    }
+  const RG = maxAB + 2;
+  for (let i = -RG; i <= RG; i++) {
+    // Vertical lines (constant a)
+    const [x0, y0] = toC(i, -RG);
+    const [x1, y1] = toC(i,  RG);
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+    // Horizontal lines (constant b)
+    const [x2, y2] = toC(-RG, i);
+    const [x3, y3] = toC( RG, i);
+    ctx.beginPath(); ctx.moveTo(x2, y2); ctx.lineTo(x3, y3); ctx.stroke();
+  }
 
-  // Lattice basis vectors (from origin)
-  const orig = toC(0, 0);
-  const vecA = toC(1, 0);
-  const vecB = toC(0.5, SQ3_2);
+  // ── Norm ellipse: a²+ab+b² = maxAB² ──────────────────────────
+  // Parameterisation derived from completing the square:
+  //   a(t) = maxAB*(cos t − sin t/√3),  b(t) = maxAB*(2/√3)*sin t
+  // Verifiable: Q(a(t),b(t)) = maxAB² for all t.
+  // In Cartesian (a,b) space this traces a √3-aspect-ratio ellipse
+  // tilted 45° — the correct "Eisenstein norm ball" boundary.
+  ctx.beginPath();
+  const SQ3 = Math.sqrt(3);
+  for (let i = 0; i <= 180; i++) {
+    const t = (2 * Math.PI * i) / 180;
+    const a = maxAB * (Math.cos(t) - Math.sin(t) / SQ3);
+    const b = maxAB * (2 / SQ3) * Math.sin(t);
+    const [x, y] = toC(a, b);
+    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.strokeStyle = COLORS.cyan + '44';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 3]);
+  ctx.stroke();
+  ctx.setLineDash([]);
 
-  ctx.strokeStyle = COLORS.cyan + '55';
+  // ── Basis vectors ─────────────────────────────────────────────
+  const [ox, oy] = toC(0, 0);
+  const [ax1, ay1] = toC(1, 0);
+  const [bx1, by1] = toC(0, 1);
+
   ctx.lineWidth = 1.5;
-  // vector a
-  ctx.beginPath(); ctx.moveTo(...orig); ctx.lineTo(...vecA); ctx.stroke();
+  ctx.strokeStyle = COLORS.cyan + '88';
+  ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(ax1, ay1); ctx.stroke();
   ctx.fillStyle = COLORS.cyan + '99';
   ctx.font = 'bold 11px monospace';
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  ctx.fillText('a=(1,0)', vecA[0] + 5, vecA[1]);
+  ctx.fillText('a', ax1 + 5, ay1);
 
-  // vector bω
-  ctx.strokeStyle = COLORS.green + '55';
-  ctx.beginPath(); ctx.moveTo(...orig); ctx.lineTo(...vecB); ctx.stroke();
+  ctx.strokeStyle = COLORS.green + '88';
+  ctx.beginPath(); ctx.moveTo(ox, oy); ctx.lineTo(bx1, by1); ctx.stroke();
   ctx.fillStyle = COLORS.green + '99';
   ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-  ctx.fillText('bω=(½,√3/2)', vecB[0] + 5, vecB[1]);
+  ctx.fillText('b (ω)', bx1 + 5, by1);
 
-  // Points — bán kính cố định trên màn hình
+  // Ellipse annotation
+  ctx.fillStyle = COLORS.cyan + '66';
+  ctx.font = '9px monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'top';
+  const [ex, ey] = toC(maxAB * 0.6, -maxAB * 1.1);
+  ctx.fillText('a²+ab+b²=R² (elipse)', ex, ey);
+
+  // ── Points ────────────────────────────────────────────────────
   const iz3e = view3d.zoom;
   _lastAlgPos.length = points.length;
   for (let idx = 0; idx < points.length; idx++) {
     const p = points[idx];
-    const [px, py] = toC(p.x, p.y);
-    // Lưu screen coords
+    const [px, py] = toC(p.a, p.b);
+    // Lưu screen coords (ngoài transform ctx.save/scale)
     _lastAlgPos[idx] = [
       (px - W/2) * view3d.zoom + W/2 + view3d.panX,
       (py - H/2) * view3d.zoom + H/2 + view3d.panY,

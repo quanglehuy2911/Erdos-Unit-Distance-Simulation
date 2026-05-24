@@ -561,12 +561,6 @@
     <!-- Q-Fractal config (shown only when method 3 is active) -->
     <div id="qfractal-cfg" style="display:none">
       <div class="section-label" data-i18n="secQFractalCfg">Cấu hình Q-Fractal</div>
-      <div class="ctrl-row">
-        <span class="ctrl-label" data-i18n="ctrlBranch">Nhánh K</span>
-        <span class="ctrl-val" id="lbl-qk">6</span>
-      </div>
-      <input type="range" id="sl-qk" min="3" max="16" value="6"
-             oninput="onSliderQK(this.value)">
       <div id="qfractal-info" class="info-box" style="font-size:10px;margin-top:4px;line-height:1.7"></div>
     </div>
 
@@ -883,7 +877,7 @@ let state = {
   lang: 'vi',        // ngôn ngữ hiển thị: 'vi' | 'en'
   prime: 7,          // số nguyên tố P cho OpenAI multi-layer
   numLayers: 3,      // số tầng cho OpenAI multi-layer (2–8)
-  qK: 6,             // số nhánh K cho Q-Fractal Generation
+  // qK removed — K is now fully adaptive (K_eff = round(2π·r))
 };
 
 // Cache vị trí screen (canvas px) của mỗi điểm sau mỗi lần vẽ — dùng cho click detection
@@ -1012,7 +1006,6 @@ const LANG = {
     ctrlPrime:       'Số nguyên tố P',
     ctrlLayers:      'Số tầng',
     secQFractalCfg:  'Cấu hình Q-Fractal',
-    ctrlBranch:      'Nhánh K',
     primeOK:      '≡1(mod 3) ✓',
     primeWarn:    p => `≡${p%3}(mod 3) ⚠`,
     primeErr:     'Không phải SNT ✗',
@@ -1075,7 +1068,6 @@ const LANG = {
     ctrlPrime:       'Prime P',
     ctrlLayers:      'Layers',
     secQFractalCfg:  'Q-Fractal Config',
-    ctrlBranch:      'Branches K',
     primeOK:      '≡1(mod 3) ✓',
     primeWarn:    p => `≡${p%3}(mod 3) ⚠`,
     primeErr:     'Not prime ✗',
@@ -1117,9 +1109,12 @@ function generateAllPoints(method, maxN) {
 //  No randomness; deterministic and fully reproducible.
 // ══════════════════════════════════════════════════════════════════
 function generateQFractal(maxN) {
-  const K      = state.qK;
-  const MIN_SEP = (2 * Math.PI) / K;   // min angular gap between chosen children
-  const N_CAND  = Math.max(36, K * 6); // evenly-spaced evaluation grid resolution
+  // K_MIN: minimum children for nodes near origin (hex = 6 is the natural
+  // minimum for unit-distance graphs — equilateral triangle packing).
+  // K_MAX: hard cap to keep generation fast for large n.
+  const K_MIN  = 6;
+  const K_HARD = 60;
+  const N_CAND  = 72; // base evenly-spaced evaluation grid (5° resolution)
   const PREC   = 1e4;         // position dedup precision
   const TWO_PI = 2 * Math.PI;
 
@@ -1228,20 +1223,12 @@ function generateQFractal(maxN) {
     const { x, y, layer } = pts[qi];
     const nearby = lhNearby(x, y);
 
-    // ── Adaptive K: scale with circumference at this radius ──────
-    // A circle of radius r has circumference 2πr. To keep density
-    // uniform (≈1 point per unit arc), we need ~2πr children around
-    // that ring collectively. Each node at radius r contributes a
-    // 1/count fraction of the ring, but we approximate per-node by
-    // K_eff = max(K, round(2π·r)) where r = dist from origin.
-    // Clamped to [K, K_MAX] so inner nodes use at least K children
-    // and outer nodes scale up naturally.
-    const K_MAX  = K * 4;            // absolute ceiling
+    // ── Adaptive K: scale with circumference 2πr ────────────────
+    // One point per unit arc → K_eff ≈ 2πr children per ring node.
+    // Floor at K_MIN=6 (hex minimum), hard-cap at K_HARD=60.
     const r      = Math.sqrt(x * x + y * y);
-    const K_eff  = r < 0.5           // root node: use base K
-                 ? K
-                 : Math.min(K_MAX, Math.max(K, Math.round(TWO_PI * r)));
-    const minSep = TWO_PI / K_eff;   // angular gap for this node
+    const K_eff  = Math.min(K_HARD, Math.max(K_MIN, Math.round(TWO_PI * r)));
+    const minSep = TWO_PI / K_eff;
     const nCand  = Math.max(N_CAND, K_eff * 4); // finer grid for large K_eff
 
     // ── 1. Build candidate pool ─────────────────────────────────
@@ -2608,28 +2595,19 @@ function drawAlgQFractal(canvas, points) {
   // Depth legend
   ctx.font = '10px monospace';
   ctx.fillStyle = '#6070a0';
-  ctx.fillText(`depth 0–${maxDepth}  |  n=${points.length}  |  K=${state.qK}`, 10, H - 10);
+  ctx.fillText(`depth 0–${maxDepth}  |  n=${points.length}  |  K adaptive (6–60)`, 10, H - 10);
 }
 
 function updateQFractalInfo() {
   const el = document.getElementById('qfractal-info');
   if (!el) return;
-  const K = state.qK;
-  const lang = state.lang;
-  const sectorDeg = (360 / K).toFixed(1);
-  const treeEdges = lang === 'vi'
-    ? `Mỗi nút sinh <b>${K} con</b>, mỗi cung <b>${sectorDeg}°</b>. ` +
-      `Cạnh cây = cặp d=1 đảm bảo. Các cặp xuyên nhánh tính thêm.`
-    : `Each node spawns <b>${K} children</b>, sector <b>${sectorDeg}°</b>. ` +
-      `Tree edges = guaranteed d=1 pairs. Cross-branch pairs also counted.`;
-  el.innerHTML = treeEdges;
-}
-
-function onSliderQK(val) {
-  state.qK = +val;
-  document.getElementById('lbl-qk').textContent = val;
-  updateQFractalInfo();
-  doReset();
+  el.innerHTML = state.lang === 'vi'
+    ? `K thích nghi theo bán kính: <b>K(r) = round(2πr)</b>, tối thiểu 6, tối đa 60.<br>` +
+      `Vòng r=1 → K≈6 &nbsp;|&nbsp; r=3 → K≈19 &nbsp;|&nbsp; r=10 → K≈60.<br>` +
+      `Góc chia đều + cross-angle → chọn K tốt nhất theo (pairs, minD2).`
+    : `K adapts to radius: <b>K(r) = round(2πr)</b>, min 6, max 60.<br>` +
+      `Ring r=1 → K≈6 &nbsp;|&nbsp; r=3 → K≈19 &nbsp;|&nbsp; r=10 → K≈60.<br>` +
+      `Evenly-spaced grid + cross-angles → best K by (pairs, minD2).`;
 }
 
 function drawFrame() {

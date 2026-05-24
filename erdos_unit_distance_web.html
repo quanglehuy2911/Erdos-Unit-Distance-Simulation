@@ -563,9 +563,9 @@
       <div class="section-label" data-i18n="secQFractalCfg">Cấu hình Q-Fractal</div>
       <div class="ctrl-row" style="margin-top:6px">
         <span class="ctrl-label" data-i18n="ctrlRmax">Bán kính R</span>
-        <span class="ctrl-val" id="lbl-qrmax">5.0</span>
+        <span class="ctrl-val" id="lbl-qrmax">2.0</span>
       </div>
-      <input type="range" id="sl-qrmax" min="1" max="15" value="5" step="0.5"
+      <input type="range" id="sl-qrmax" min="1" max="8" value="2" step="0.5"
              oninput="onSliderQRmax(this.value)">
       <div id="qfractal-info" class="info-box" style="font-size:10px;margin-top:4px;line-height:1.7"></div>
     </div>
@@ -884,7 +884,7 @@ let state = {
   prime: 7,          // số nguyên tố P cho OpenAI multi-layer
   numLayers: 3,      // số tầng cho OpenAI multi-layer (2–8)
   // qK removed — K is now fully adaptive (K_eff = round(2π·r))
-  qRmax: 5.0,    // radius bound for Q-Fractal (all points within |P|≤qRmax)
+  qRmax: 2.0,    // radius bound for Q-Fractal (all points within |P|≤qRmax)
 };
 
 // Cache vị trí screen (canvas px) của mỗi điểm sau mỗi lần vẽ — dùng cho click detection
@@ -1123,7 +1123,171 @@ function generateAllPoints(method, maxN) {
 //     – Otherwise: add C to the point set, enqueue around C.
 //  4. Repeat until n points placed.
 //
+//  d_min is ADAPTIVE: chosen so that a disk of radius RMAX can hold ≥ maxN
+//  points (from hexagonal packing: d_min ≈ 1.3·RMAX/√maxN).  N_CAND adapts
+//  accordingly so the unit circle is sampled at roughly d_min resolution.
+// ══════════════════════════════════════════════════════════════════
+function generateQFractal(maxN, rmax) {
+  const RMAX    = (rmax > 0) ? rmax : 1.0;  // bounding disk radius
+  const RMAX2   = RMAX * RMAX;
 
+  // Adaptive d_min: scales with RMAX and maxN so disk can hold ≥ maxN points.
+  // Hexagonal packing capacity: n_max ≈ π·R²/(π·(d/2)²) = 4R²/d² → d = 2R/√n.
+  // Use factor 0.9 for safety margin.  Floor at 0.03 (numerical stability).
+  const d_min  = Math.max(0.03, 0.9 * 2 * RMAX / Math.sqrt(Math.max(1, maxN)));
+  const D_MIN2 = d_min * d_min;
+
+  // Adaptive N_CAND: sample unit circle at ≈ d_min arc-step (capped at 120).
+  // arc-step = 2π/N_CAND  →  N_CAND = 2π/d_min.
+  const N_CAND = Math.max(24, Math.min(120, Math.ceil(2 * Math.PI / d_min)));
+
+  const PREC    = 1e4;
+  const TWO_PI  = 2 * Math.PI;
+
+  const pts    = [];           // { x, y, layer, parentIdx }
+  const posMap = new Map();
+
+  // ── Local spatial hash (cell size = 1, same design as global hash) ──
+  const localHash = new Map();
+  function lhKey(ix, iy) { return `${ix},${iy}`; }
+  function lhAdd(idx, x, y) {
+    const k = lhKey(Math.floor(x), Math.floor(y));
+    let cell = localHash.get(k);
+    if (!cell) { cell = []; localHash.set(k, cell); }
+    cell.push(idx);
+  }
+  // Return indices of all points in a 5×5 cell neighborhood (radius ≤ 2)
+  function lhNearby(x, y) {
+    const result = [];
+    const gx = Math.floor(x), gy = Math.floor(y);
+    for (let ddx = -2; ddx <= 2; ddx++)
+      for (let ddy = -2; ddy <= 2; ddy++) {
+        const cell = localHash.get(lhKey(gx + ddx, gy + ddy));
+        if (cell) for (const i of cell) result.push(i);
+      }
+    return result;
+  }
+
+  function posKey(x, y) {
+    return `${Math.round(x * PREC)},${Math.round(y * PREC)}`;
+  }
+  function addPt(x, y, depth, parentIdx) {
+    const k = posKey(x, y);
+    if (posMap.has(k)) return -1;
+    const idx = pts.length;
+    pts.push({ x, y, a: Math.round(x * PREC), b: Math.round(y * PREC),
+               layer: depth, parentIdx });
+    posMap.set(k, idx);
+    lhAdd(idx, x, y);
+    return idx;
+  }
+
+  // Normalize angle → [0, 2π)
+  function normAngle(a) {
+    a = a % TWO_PI;
+    return a < 0 ? a + TWO_PI : a;
+  }
+
+  // Given parent P=(px,py) and existing point Q=(qx,qy), find absolute
+  // angles θ such that child C = P+(cosθ,sinθ) satisfies |C−Q| = 1.
+  //
+  // Derivation:  |P+(cosθ,sinθ) − Q|² = 1
+  //   (dx+cosθ)² + (dy+sinθ)² = 1,   dx = px−qx, dy = py−qy
+  //   d² + 2(dx·cosθ + dy·sinθ) + 1 = 1   (using cos²+sin²=1)
+  //   dx·cosθ + dy·sinθ = −d²/2
+  //   → θ = atan2(dy,dx) ± acos(−d/2),   where d = |P−Q|
+  //   Solution exists ⟺ d ≤ 2 (two unit circles intersect)
+  function crossAngles(px, py, qx, qy) {
+    const dx = px - qx, dy = py - qy;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < 1e-9 || d2 > 4.0 + 1e-9) return [];   // d=0 or d>2 → no solution
+    const d = Math.sqrt(d2);
+    const cosArg = Math.max(-1, Math.min(1, -d / 2)); // clamp for safety
+    const beta  = Math.acos(cosArg);
+    const alpha = Math.atan2(dy, dx);
+    return [alpha + beta, alpha - beta];
+  }
+
+  // ── Candidate heap: min-heap keyed by dist² from origin ────────
+  // Stores POSITIONS (not point indices). Each entry {cx,cy,d2}.
+  const heap     = [];
+  const heapKeys = new Set(); // posKey → avoid duplicate heap entries
+
+  function hPush(cx, cy) {
+    if (cx * cx + cy * cy > RMAX2 + 1e-9) return;  // outside bounding disk
+    const k = posKey(cx, cy);
+    if (posMap.has(k) || heapKeys.has(k)) return;
+    heapKeys.add(k);
+    heap.push({ cx, cy, d2: cx * cx + cy * cy });
+    let i = heap.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (heap[p].d2 <= heap[i].d2) break;
+      const t = heap[p]; heap[p] = heap[i]; heap[i] = t; i = p;
+    }
+  }
+  function hPop() {
+    if (heap.length === 1) return heap.pop();
+    const min = heap[0];
+    heap[0] = heap.pop();
+    let i = 0;
+    for (;;) {
+      const l = 2 * i + 1, r = 2 * i + 2;
+      let s = i;
+      if (l < heap.length && heap[l].d2 < heap[s].d2) s = l;
+      if (r < heap.length && heap[r].d2 < heap[s].d2) s = r;
+      if (s === i) break;
+      const t = heap[i]; heap[i] = heap[s]; heap[s] = t; i = s;
+    }
+    return min;
+  }
+
+  // Enqueue all unit-circle positions around point (px, py):
+  //   (a) N_CAND evenly-spaced grid positions
+  //   (b) Cross-angle positions (analytically exact, at dist 1 from
+  //       both px,py AND an existing neighbour)
+  function enqueue(px, py) {
+    for (let i = 0; i < N_CAND; i++)
+      hPush(px + Math.cos(TWO_PI * i / N_CAND),
+            py + Math.sin(TWO_PI * i / N_CAND));
+    const nb = lhNearby(px, py);
+    for (const ni of nb) {
+      const q = pts[ni];
+      for (const θ of crossAngles(px, py, q.x, q.y))
+        hPush(px + Math.cos(θ), py + Math.sin(θ));
+    }
+  }
+
+  // ── Expansion loop ───────────────────────────────────────────────
+  addPt(0, 0, 0, -1);
+  enqueue(0, 0);
+
+  while (pts.length < maxN && heap.length > 0) {
+    const { cx, cy } = hPop();
+    const k = posKey(cx, cy);
+    heapKeys.delete(k);
+    if (posMap.has(k)) continue;   // stale entry — position taken
+
+    // Check: (a) not too close to any existing point, (b) ≥1 unit-distance neighbour
+    const nb = lhNearby(cx, cy);
+    let pairs = 0, parentIdx = -1, parentD2 = Infinity, tooClose = false;
+    for (const ni of nb) {
+      const q = pts[ni];
+      const ddx = cx - q.x, ddy = cy - q.y, d2 = ddx * ddx + ddy * ddy;
+      if (d2 < D_MIN2) { tooClose = true; break; }          // spacing violation
+      if (Math.abs(d2 - 1.0) < EPS) {
+        pairs++;
+        if (d2 < parentD2) { parentD2 = d2; parentIdx = ni; }
+      }
+    }
+    if (tooClose || pairs === 0) continue;   // reject this candidate
+
+    const depth = parentIdx >= 0 ? pts[parentIdx].layer + 1 : 0;
+    if (addPt(cx, cy, depth, parentIdx) !== -1) enqueue(cx, cy);
+  }
+
+  return pts.slice(0, maxN);
+}
 
 function generateSquareGrid(maxN) {
   const side = Math.ceil(Math.sqrt(maxN));
@@ -2455,24 +2619,31 @@ function drawAlgQFractal(canvas, points) {
   // Depth legend
   ctx.font = '10px monospace';
   ctx.fillStyle = '#6070a0';
-ctx.fillText(`depth 0–${maxDepth}  |  n=${points.length}  |  R≤${state.qRmax.toFixed(1)}  |  hex lattice, pairs≥2`, 10, H - 10);
+{
+    const R = state.qRmax, N = state.maxN;
+    const dm = Math.max(0.03, 0.9 * 2 * R / Math.sqrt(Math.max(1, N)));
+    ctx.fillText(`depth 0–${maxDepth}  |  n=${points.length}  |  R≤${R.toFixed(1)}, d_min=${dm.toFixed(3)}`, 10, H - 10);
+  }
 }
 
 function updateQFractalInfo() {
   const el = document.getElementById('qfractal-info');
   if (!el) return;
-  const R   = state.qRmax;
-  const cap = Math.round(2 * Math.PI * R * R / Math.sqrt(3));
-  const Rf  = R.toFixed(1);
+  const R      = state.qRmax;
+  const n      = state.maxN;
+  const d_min  = Math.max(0.03, 0.9 * 2 * R / Math.sqrt(Math.max(1, n)));
+  const nCand  = Math.max(24, Math.min(120, Math.ceil(2 * Math.PI / d_min)));
+  const nMax   = Math.floor(Math.PI * R * R / (Math.PI * (d_min / 2) ** 2));
+  const Rf     = R.toFixed(1), df = d_min.toFixed(3);
   el.innerHTML = state.lang === 'vi'
-    ? `Thuật toán: <b>pairs ≥ 2</b>, chỉ vị trí cross-angle, không có d_min.<br>` +
-      `Đĩa bán kính <b>R = ${Rf}</b> → lưới lục giác ≈ <b>${cap.toLocaleString()} điểm</b>.<br>` +
-      `Mỗi điểm mới được chấp nhận khi ≥ 2 hàng xóm ở đúng khoảng cách 1.<br>` +
-      `Đường cyan đứt = biên đĩa. Tăng R để có thêm điểm.`
-    : `Algorithm: <b>pairs ≥ 2</b>, cross-angle positions only, no d_min.<br>` +
-      `Disk radius <b>R = ${Rf}</b> → hex lattice ≈ <b>${cap.toLocaleString()} points</b>.<br>` +
-      `Each new point accepted only when it has ≥ 2 unit-distance neighbours.<br>` +
-      `Dashed cyan = disk boundary. Increase R to generate more points.`;
+    ? `Đĩa bán kính <b>R = ${Rf}</b>, d_min = <b>${df}</b>, N_CAND = <b>${nCand}</b>.<br>` +
+      `Sức chứa tối đa ≈ ${nMax.toLocaleString()} điểm trong đĩa này.<br>` +
+      `Pop gần gốc nhất → lọc ngoài R, kiểm tra d_min + kết nối d=1 → thêm.<br>` +
+      `Đường cyan đứt = biên đĩa. Tăng R để chứa thêm điểm.`
+    : `Disk radius <b>R = ${Rf}</b>, d_min = <b>${df}</b>, N_CAND = <b>${nCand}</b>.<br>` +
+      `Max capacity ≈ ${nMax.toLocaleString()} points in this disk.<br>` +
+      `Pop closest-to-origin → filter outside R, d_min spacing + d=1 → add.<br>` +
+      `Dashed cyan = disk boundary. Increase R to hold more points.`;
 }
 
 function drawFrame() {
@@ -2948,186 +3119,6 @@ document.addEventListener('DOMContentLoaded', () => {
     if (e.target === document.getElementById('large-n-backdrop')) confirmLargeN(false);
   });
 });
-
-// ══════════════════════════════════════════════════════════════════
-function generateQFractal(maxN, rmax) {
-  const RMAX  = (rmax > 0) ? rmax : 1.0;
-  const RMAX2 = RMAX * RMAX;
-  const PREC  = 1e4;
-
-  const pts    = [];
-  const posMap = new Map();
-
-  // ── Local spatial hash ───────────────────────────────────────────
-  const localHash = new Map();
-  function lhKey(ix, iy) { return `${ix},${iy}`; }
-  function lhAdd(idx, x, y) {
-    const k = lhKey(Math.floor(x), Math.floor(y));
-    let cell = localHash.get(k);
-    if (!cell) { cell = []; localHash.set(k, cell); }
-    cell.push(idx);
-  }
-  function lhNearby(x, y) {
-    const result = [];
-    const gx = Math.floor(x), gy = Math.floor(y);
-    for (let ddx = -2; ddx <= 2; ddx++)
-      for (let ddy = -2; ddy <= 2; ddy++) {
-        const cell = localHash.get(lhKey(gx + ddx, gy + ddy));
-        if (cell) for (const i of cell) result.push(i);
-      }
-    return result;
-  }
-
-  function posKey(x, y) {
-    return `${Math.round(x * PREC)},${Math.round(y * PREC)}`;
-  }
-  function addPt(x, y, depth, parentIdx) {
-    const k = posKey(x, y);
-    if (posMap.has(k)) return -1;
-    const idx = pts.length;
-    pts.push({ x, y, a: Math.round(x * PREC), b: Math.round(y * PREC),
-               layer: depth, parentIdx });
-    posMap.set(k, idx);
-    lhAdd(idx, x, y);
-    return idx;
-  }
-
-  // Cross-angle: angles θ s.t. P+(cosθ,sinθ) is at unit distance from Q.
-  // Requires 0 < |PQ| ≤ 2.  Returns up to 2 angles.
-  function crossAngles(px, py, qx, qy) {
-    const dx = px - qx, dy = py - qy;
-    const d2 = dx * dx + dy * dy;
-    if (d2 < 1e-9 || d2 > 4.0 + 1e-9) return [];
-    const beta  = Math.acos(Math.max(-1, Math.min(1, -Math.sqrt(d2) / 2)));
-    const alpha = Math.atan2(dy, dx);
-    return [alpha + beta, alpha - beta];
-  }
-
-  // ── Min-heap keyed by dist² from origin ─────────────────────────
-  const heap     = [];
-  const heapKeys = new Set();
-
-  function hPush(cx, cy) {
-    if (cx * cx + cy * cy > RMAX2 + 1e-9) return;   // outside bounding disk
-    const k = posKey(cx, cy);
-    if (posMap.has(k) || heapKeys.has(k)) return;
-    heapKeys.add(k);
-    heap.push({ cx, cy, d2: cx * cx + cy * cy });
-    let i = heap.length - 1;
-    while (i > 0) {
-      const p = (i - 1) >> 1;
-      if (heap[p].d2 <= heap[i].d2) break;
-      const t = heap[p]; heap[p] = heap[i]; heap[i] = t; i = p;
-    }
-  }
-  function hPop() {
-    if (heap.length === 1) return heap.pop();
-    const min = heap[0];
-    heap[0] = heap.pop();
-    let i = 0;
-    for (;;) {
-      const l = 2 * i + 1, r = 2 * i + 2;
-      let s = i;
-      if (l < heap.length && heap[l].d2 < heap[s].d2) s = l;
-      if (r < heap.length && heap[r].d2 < heap[s].d2) s = r;
-      if (s === i) break;
-      const t = heap[i]; heap[i] = heap[s]; heap[s] = t; i = s;
-    }
-    return min;
-  }
-
-  // Enqueue ONLY cross-angle positions (no grid sampling).
-  function enqueue(px, py) {
-    const nb = lhNearby(px, py);
-    for (const ni of nb) {
-      const q = pts[ni];
-      for (const theta of crossAngles(px, py, q.x, q.y))
-        hPush(px + Math.cos(theta), py + Math.sin(theta));
-    }
-  }
-
-  // ── Seed: first unit-distance edge centred near origin ──────────
-  addPt(-0.5, 0, 0, -1);
-  if (maxN >= 2) addPt(0.5, 0, 1, 0);
-  enqueue(-0.5, 0);
-  enqueue(0.5, 0);
-
-  // ── Expansion loop ───────────────────────────────────────────────
-  while (pts.length < maxN && heap.length > 0) {
-    const { cx, cy } = hPop();
-    const k = posKey(cx, cy);
-    heapKeys.delete(k);
-    if (posMap.has(k)) continue;   // stale
-
-    // Require ≥ 2 unit-distance neighbours (no d_min check needed).
-    const nb = lhNearby(cx, cy);
-    let pairs = 0, parentIdx = -1, parentD2 = Infinity;
-    for (const ni of nb) {
-      const q = pts[ni];
-      const ddx = cx - q.x, ddy = cy - q.y, d2 = ddx * ddx + ddy * ddy;
-      if (Math.abs(d2 - 1.0) < EPS) {
-        pairs++;
-        if (d2 < parentD2) { parentD2 = d2; parentIdx = ni; }
-      }
-    }
-    if (pairs < 2) continue;
-
-    const depth = parentIdx >= 0 ? pts[parentIdx].layer + 1 : 0;
-    if (addPt(cx, cy, depth, parentIdx) !== -1) enqueue(cx, cy);
-  }
-
-  return pts.slice(0, maxN);}
-</script>
-
-<!-- ── Large-N warning popup ── -->
-<div id="large-n-backdrop">
-  <div id="large-n-popup">
-    <h3>⚠ Cảnh báo số điểm lớn</h3>
-    <div class="popup-body" id="large-n-msg"></div>
-    <div class="popup-btns">
-      <button id="btn-popup-cancel" onclick="confirmLargeN(false)">← Quay lại</button>
-      <button id="btn-popup-confirm" onclick="confirmLargeN(true)">Tiếp tục →</button>
-    </div>
-  </div>
-</div>
-</body>
-</html>// ══════════════════════════════════════════════════════════════════
-//  Q-FRACTAL GENERATION  (cross-angle only · pairs ≥ 2)
-//
-//  No d_min, no grid sampling (N_CAND removed).
-//  Algorithm:
-//  1. Seed with two points: (0,0) and (1,0) — the first unit-distance edge.
-//  2. Each added point P enqueues ONLY cross-angle positions into a min-heap
-//     (keyed by dist² from origin, rejected if outside RMAX).
-//     A cross-angle C = P+(cosθ,sinθ) satisfies |C−Q|=1 for some existing
-//     neighbour Q  ⟹  C is at unit distance from BOTH P and Q.
-//  3. Pop the closest-to-origin candidate C.
-//     – Stale (already placed): skip.
-//     – pairs(C) < 2: skip.  ← KEY: need ≥2 unit-distance neighbours.
-//     – Otherwise: place C, enqueue cross-angles from C.
-//  4. Repeat until maxN points placed or heap empty.
-//
-//  Why pairs ≥ 2 prevents infinite loops:
-//    From N placed points, cross-angle positions ≤ 2·C(N,2) = N(N−1) — finite.
-//    All filtered by RMAX in hPush.  Heap always terminates.
-//
-//  Result: hexagonal lattice fills disk of radius RMAX.
-//  Capacity ≈ 2π·RMAX²/√3 ≈ 3.63·RMAX².
-
-oblem — Interactive Visualization
-  ========================================================
-  Deployment on Vercel (static site, zero config):
-    1. Save this file as index.html inside a folder (e.g. erdos-viz/)
-    2. Push the folder to a GitHub repository
-    3. Import the repo on vercel.com → Deploy
-  No build step, no backend, no package.json required.
--->
-<!DOCTYPE html>
-<html lang="vi">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Erdős Unit Distance Problem</title>
 </script>
 
 <!-- ── Large-N warning popup ── -->

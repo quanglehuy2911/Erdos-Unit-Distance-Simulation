@@ -10,7 +10,7 @@
 An interactive visualization of the classic **Erdős Unit Distance Problem** and the breakthrough 2025 OpenAI result proving that the number of unit-distance pairs can grow super-linearly.
 
 ![Erdős Unit Distance Simulation](screenshot.png)
-*CM Eisenstein Q(√−3) lattice — 500 points, 1,420 unit-distance pairs. Selected point (white/gold) highlights its 6 exact unit-distance neighbors.*
+*OpenAI CM Multi-layer — 3 Eisenstein layers (green / orange / purple). Selected point (white) with unit-distance neighbors highlighted in gold across all three layers; gold lines show cross-layer unit-distance pairs.*
 
 **→ Open `erdos_unit_distance_web.html` directly in any modern browser. No installation required.**
 
@@ -260,7 +260,7 @@ A companion paper by Alon, Bloom, Gowers et al. simplifies and makes the proof f
 Mô phỏng tương tác trực quan bài toán **Erdős Unit Distance** cổ điển và kết quả đột phá của OpenAI (2025) chứng minh rằng số cặp điểm cách nhau đúng 1 đơn vị có thể vượt tuyến tính.
 
 ![Erdős Unit Distance Simulation](screenshot.png)
-*Lưới Eisenstein Q(√−3) — 500 điểm, 1.420 cặp khoảng cách 1. Điểm được chọn (trắng/vàng) highlight đúng 6 hàng xóm cách nó 1 đơn vị.*
+*OpenAI CM Multi-layer — 3 tầng Eisenstein (xanh / cam / tím). Điểm chọn (trắng) highlight các hàng xóm khoảng cách 1 trên cả ba tầng; đường vàng là các cặp unit-distance xuyên tầng.*
 
 **→ Mở file `erdos_unit_distance_web.html` trực tiếp trong trình duyệt. Không cần cài đặt gì thêm.**
 

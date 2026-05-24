@@ -404,11 +404,11 @@
     border-color: #5060a0;
     background: rgba(30,40,80,0.9);
   }
-  /* Expanded panel covers all of #content */
+  /* Expanded panel covers all of #content, incl. other panels' buttons (z-index 20) */
   .panel-expanded {
     position: absolute !important;
     inset: 0 !important;
-    z-index: 15 !important;
+    z-index: 30 !important;
     border-radius: var(--radius) !important;
   }
 

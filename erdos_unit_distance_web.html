@@ -1292,8 +1292,10 @@ function generateQFractal(maxN, rmax) {
   // ── Candidate heap: min-heap keyed by composite score ────────────
   // Key = d2 − pe * 1e9 :  positions with more unit-distance connections
   // (pe) come first; ties broken by proximity to origin (d2).
-  // pe is a static estimate set at push time — no O(n) countPairs needed.
-  // Stores POSITIONS (not point indices). Each entry {cx, cy, key}.
+  // Strategy: push with cheap static pe (O(1)), correct at pop time.
+  //   pe = 0  grid samples  |  pe = 2  cross-angle (analytically guaranteed)
+  // At pop time: if actual pairs > pe_est, re-insert with correct pe so
+  // the candidate gets proper priority — O(1) re-insert, preserves quality.
   const heap     = [];
   const heapKeys = new Map(); // posKey → best key seen so far
 
@@ -1306,7 +1308,7 @@ function generateQFractal(maxN, rmax) {
     const existing = heapKeys.get(k);
     if (existing !== undefined && existing <= key) return;
     heapKeys.set(k, key);
-    heap.push({ cx, cy, key });
+    heap.push({ cx, cy, key, pe: pe || 0 });   // store pe for pop-time check
     let i = heap.length - 1;
     while (i > 0) {
       const p = (i - 1) >> 1;
@@ -1330,11 +1332,7 @@ function generateQFractal(maxN, rmax) {
     return min;
   }
 
-  // Enqueue all unit-circle positions around point (px, py).
-  // pe is assigned statically — O(1) per push, no countPairs scan:
-  //   pe = 0  for evenly-spaced grid samples (unknown connectivity)
-  //   pe = 2  for cross-angle positions (analytically guaranteed ≥2 pairs)
-  // Actual pair count is re-verified at pop time before accepting.
+  // Enqueue: O(1) pe estimate per push — no countPairs scan.
   function enqueue(px, py) {
     for (let i = 0; i < N_CAND; i++)
       hPush(px + Math.cos(TWO_PI * i / N_CAND),
@@ -1352,25 +1350,29 @@ function generateQFractal(maxN, rmax) {
   enqueue(0, 0);
 
   while (pts.length < maxN && heap.length > 0) {
-    const { cx, cy, key } = hPop();
+    const { cx, cy, key, pe: pe_est } = hPop();
     const k = posKey(cx, cy);
     if (posMap.has(k)) continue;              // already placed
     if (heapKeys.get(k) !== key) continue;    // superseded by a better-scored entry
     heapKeys.delete(k);
 
-    // Check: (a) not too close to any existing point, (b) ≥1 unit-distance neighbour
+    // Count actual unit-distance neighbours and check d_min
     const nb = lhNearby(cx, cy);
     let pairs = 0, parentIdx = -1, parentD2 = Infinity, tooClose = false;
     for (const ni of nb) {
       const q = pts[ni];
       const ddx = cx - q.x, ddy = cy - q.y, d2 = ddx * ddx + ddy * ddy;
-      if (d2 < D_MIN2) { tooClose = true; break; }          // spacing violation
+      if (d2 < D_MIN2) { tooClose = true; break; }
       if (Math.abs(d2 - 1.0) < EPS) {
         pairs++;
         if (d2 < parentD2) { parentD2 = d2; parentIdx = ni; }
       }
     }
-    if (tooClose || pairs === 0) continue;   // reject this candidate
+    if (tooClose || pairs === 0) continue;
+
+    // Lazy priority correction: if actual pairs exceeds the static estimate,
+    // re-insert with the true pe so this position gets proper heap priority.
+    if (pairs > pe_est) { hPush(cx, cy, pairs); continue; }
 
     const depth = parentIdx >= 0 ? pts[parentIdx].layer + 1 : 0;
     if (addPt(cx, cy, depth, parentIdx) !== -1) enqueue(cx, cy);
@@ -1464,7 +1466,7 @@ async function generateQFractalAsync(maxN, rmax, genId) {
     const existing = heapKeys.get(k);
     if (existing !== undefined && existing <= key) return;
     heapKeys.set(k, key);
-    heap.push({ cx, cy, key });
+    heap.push({ cx, cy, key, pe: pe || 0 });    // store pe for pop-time check
     let i = heap.length - 1;
     while (i > 0) {
       const p = (i - 1) >> 1;
@@ -1487,9 +1489,7 @@ async function generateQFractalAsync(maxN, rmax, genId) {
     }
     return min;
   }
-  // pe assigned statically — O(1) per push, no countPairs scan:
-  //   pe = 0  grid samples (connectivity unknown at push time)
-  //   pe = 2  cross-angle positions (analytically ≥2 pairs guaranteed)
+  // Enqueue: O(1) pe estimate per push — no countPairs scan.
   function enqueue(px, py) {
     for (let i = 0; i < N_CAND; i++)
       hPush(px + Math.cos(TWO_PI * i / N_CAND),
@@ -1504,8 +1504,8 @@ async function generateQFractalAsync(maxN, rmax, genId) {
 
   // ── Setup ──
   showQFOverlay(0, 0, maxN, 'preparing');
-  await new Promise(r => setTimeout(r, 0));          // yield → browser shows overlay
-  if (state.qfGenId !== genId) return null;          // cancelled
+  await new Promise(r => setTimeout(r, 0));
+  if (state.qfGenId !== genId) return null;
 
   addPt(0, 0, 0, -1);
   enqueue(0, 0);
@@ -1515,7 +1515,7 @@ async function generateQFractalAsync(maxN, rmax, genId) {
   let lastYield = performance.now();
 
   while (pts.length < maxN && heap.length > 0) {
-    const { cx, cy, key } = hPop();
+    const { cx, cy, key, pe: pe_est } = hPop();
     const k = posKey(cx, cy);
     if (posMap.has(k)) continue;
     if (heapKeys.get(k) !== key) continue;
@@ -1534,6 +1534,9 @@ async function generateQFractalAsync(maxN, rmax, genId) {
     }
     if (tooClose || pairs === 0) continue;
 
+    // Lazy priority correction: re-insert with true pe if underestimated.
+    if (pairs > pe_est) { hPush(cx, cy, pairs); continue; }
+
     const depth = parentIdx >= 0 ? pts[parentIdx].layer + 1 : 0;
     if (addPt(cx, cy, depth, parentIdx) !== -1) enqueue(cx, cy);
 
@@ -1542,7 +1545,7 @@ async function generateQFractalAsync(maxN, rmax, genId) {
     if (now - lastYield >= 16) {
       showQFOverlay(pts.length / maxN, pts.length, maxN, 'computing');
       await new Promise(r => setTimeout(r, 0));
-      if (state.qfGenId !== genId) return null;      // cancelled by new reset
+      if (state.qfGenId !== genId) return null;
       lastYield = performance.now();
     }
   }

@@ -950,16 +950,18 @@ const METHOD_INFO = [
     color: '#ff6b9d',
     name: { vi: 'Q-Fractal Generation', en: 'Q-Fractal Generation' },
     desc: {
-      vi: 'Cây fractal ngẫu nhiên trong R². Gốc = (0,0). Mỗi nút sinh K con ' +
-          'nằm trên đường tròn bán kính 1, mỗi con ở một cung 2π/K khác nhau (góc ngẫu nhiên trong cung). ' +
-          'Mọi cạnh cây đều là cặp khoảng cách = 1, cộng thêm cặp xuyên nhánh tình cờ. ' +
-          'α lý thuyết ≈ 1 (từ cấu trúc cây). Reset để thấy thực nghiệm khác nhau do ngẫu nhiên.',
-      en: 'Random fractal tree in R². Root = (0,0). Each node spawns K children ' +
-          'on a unit circle, one per 2π/K arc (random angle within arc). ' +
-          'All tree edges are unit-distance pairs; extra cross-branch coincidences also counted. ' +
-          'Theoretical α ≈ 1 (from tree structure). Reset to see different random realisations.',
+      vi: 'Cây fractal BFS trong R² với căn chỉnh xuyên nhánh. Gốc = (0,0). Mỗi nút sinh K con ' +
+          'nằm trên đường tròn bán kính 1, mỗi con ở một cung 2π/K. ' +
+          'Với mỗi cung, thuật toán tìm góc đặt con sao cho con cũng cách đúng 1 đơn vị với điểm lân cận có sẵn ' +
+          '(tạo cặp xuyên nhánh chủ động); nếu không tìm được thì dùng góc ngẫu nhiên trong cung. ' +
+          'Lý thuyết: ν ≥ n−1 (cạnh cây). Thực tế vượt đáng kể nhờ các cặp xuyên nhánh.',
+      en: 'BFS fractal tree in R² with cross-branch alignment. Root = (0,0). Each node spawns K children ' +
+          'on a unit circle, one per 2π/K sector. ' +
+          'For each sector, the algorithm finds an angle placing the child at unit distance from ' +
+          'an existing nearby point (deliberate cross-branch pair); falls back to random if none found. ' +
+          'Theory: ν ≥ n−1 (tree edges). Actual count exceeds this via cross-branch connections.',
     },
-    header: 'max pairs at distance 1 — Q-Fractal random tree',
+    header: 'max pairs at distance 1 — Q-Fractal (cross-branch alignment)',
   },
 ];
 
@@ -1106,17 +1108,43 @@ function generateAllPoints(method, maxN) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-//  Q-FRACTAL GENERATION
+//  Q-FRACTAL GENERATION  (Direction 2 — cross-branch alignment)
 //  BFS fractal tree: each node → K children on unit circle,
-//  one per angular sector of size 2π/K (random angle within sector)
+//  one per angular sector of size 2π/K.
+//  For each sector, we search for an angle that places the child
+//  at unit distance from an existing nearby point (not just the
+//  parent), creating deliberate cross-branch pairs.
+//  Fallback: random angle within sector when no alignment found.
 // ══════════════════════════════════════════════════════════════════
 function generateQFractal(maxN) {
-  const K = state.qK;
+  const K      = state.qK;
   const SECTOR = (2 * Math.PI) / K;
-  const PREC   = 1e4;  // position dedup precision
+  const PREC   = 1e4;         // position dedup precision
+  const TWO_PI = 2 * Math.PI;
 
-  const pts    = [];   // {x, y, layer (=depth), parentIdx}
+  const pts    = [];           // { x, y, layer, parentIdx }
   const posMap = new Map();
+
+  // ── Local spatial hash (cell size = 1, same design as global hash) ──
+  const localHash = new Map();
+  function lhKey(ix, iy) { return `${ix},${iy}`; }
+  function lhAdd(idx, x, y) {
+    const k = lhKey(Math.floor(x), Math.floor(y));
+    let cell = localHash.get(k);
+    if (!cell) { cell = []; localHash.set(k, cell); }
+    cell.push(idx);
+  }
+  // Return indices of all points in a 5×5 cell neighborhood (radius ≤ 2)
+  function lhNearby(x, y) {
+    const result = [];
+    const gx = Math.floor(x), gy = Math.floor(y);
+    for (let ddx = -2; ddx <= 2; ddx++)
+      for (let ddy = -2; ddy <= 2; ddy++) {
+        const cell = localHash.get(lhKey(gx + ddx, gy + ddy));
+        if (cell) for (const i of cell) result.push(i);
+      }
+    return result;
+  }
 
   function posKey(x, y) {
     return `${Math.round(x * PREC)},${Math.round(y * PREC)}`;
@@ -1128,21 +1156,73 @@ function generateQFractal(maxN) {
     pts.push({ x, y, a: Math.round(x * PREC), b: Math.round(y * PREC),
                layer: depth, parentIdx });
     posMap.set(k, idx);
+    lhAdd(idx, x, y);
     return idx;
   }
 
-  // BFS queue stores node indices
+  // Normalize angle → [0, 2π)
+  function normAngle(a) {
+    a = a % TWO_PI;
+    return a < 0 ? a + TWO_PI : a;
+  }
+
+  // Given parent P=(px,py) and existing point Q=(qx,qy), find absolute
+  // angles θ such that child C = P+(cosθ,sinθ) satisfies |C−Q| = 1.
+  //
+  // Derivation:  |P+(cosθ,sinθ) − Q|² = 1
+  //   (dx+cosθ)² + (dy+sinθ)² = 1,   dx = px−qx, dy = py−qy
+  //   d² + 2(dx·cosθ + dy·sinθ) + 1 = 1   (using cos²+sin²=1)
+  //   dx·cosθ + dy·sinθ = −d²/2
+  //   → θ = atan2(dy,dx) ± acos(−d/2),   where d = |P−Q|
+  //   Solution exists ⟺ d ≤ 2 (two unit circles intersect)
+  function crossAngles(px, py, qx, qy) {
+    const dx = px - qx, dy = py - qy;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < 1e-9 || d2 > 4.0 + 1e-9) return [];   // d=0 or d>2 → no solution
+    const d = Math.sqrt(d2);
+    const cosArg = Math.max(-1, Math.min(1, -d / 2)); // clamp for safety
+    const beta  = Math.acos(cosArg);
+    const alpha = Math.atan2(dy, dx);
+    return [alpha + beta, alpha - beta];
+  }
+
+  // ── BFS ──
   addPt(0, 0, 0, -1);
   let qi = 0;
 
   while (pts.length < maxN && qi < pts.length) {
     const { x, y, layer } = pts[qi];
+    const nearby = lhNearby(x, y);   // existing points within reach
+
     for (let j = 0; j < K; j++) {
       if (pts.length >= maxN) break;
-      const angle = j * SECTOR + Math.random() * SECTOR;
-      const nx = x + Math.cos(angle);
-      const ny = y + Math.sin(angle);
-      addPt(nx, ny, layer + 1, qi);
+
+      const sMin = j * SECTOR;
+      const sMax = (j + 1) * SECTOR;  // last sector: sMax = 2π (< is always ok)
+
+      // Search for a cross-branch alignment angle in this sector
+      let chosenAngle = null;
+      outer:
+      for (const ni of nearby) {
+        if (ni === qi) continue;       // skip self (d=0 → crossAngles returns [])
+        const q = pts[ni];
+        for (const θ of crossAngles(x, y, q.x, q.y)) {
+          const nt = normAngle(θ);
+          if (nt >= sMin && nt < sMax) {
+            chosenAngle = θ;
+            break outer;
+          }
+        }
+      }
+
+      // Fallback: random angle within sector
+      if (chosenAngle === null) {
+        chosenAngle = sMin + Math.random() * SECTOR;
+      }
+
+      addPt(x + Math.cos(chosenAngle),
+            y + Math.sin(chosenAngle),
+            layer + 1, qi);
     }
     qi++;
   }

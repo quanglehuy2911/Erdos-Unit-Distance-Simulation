@@ -561,6 +561,12 @@
     <!-- Q-Fractal config (shown only when method 3 is active) -->
     <div id="qfractal-cfg" style="display:none">
       <div class="section-label" data-i18n="secQFractalCfg">Cấu hình Q-Fractal</div>
+      <div class="ctrl-row" style="margin-top:6px">
+        <span class="ctrl-label" data-i18n="ctrlRmax">Bán kính R</span>
+        <span class="ctrl-val" id="lbl-qrmax">1.0</span>
+      </div>
+      <input type="range" id="sl-qrmax" min="0.5" max="5" value="1" step="0.5"
+             oninput="onSliderQRmax(this.value)">
       <div id="qfractal-info" class="info-box" style="font-size:10px;margin-top:4px;line-height:1.7"></div>
     </div>
 
@@ -878,6 +884,7 @@ let state = {
   prime: 7,          // số nguyên tố P cho OpenAI multi-layer
   numLayers: 3,      // số tầng cho OpenAI multi-layer (2–8)
   // qK removed — K is now fully adaptive (K_eff = round(2π·r))
+  qRmax: 1.0,    // radius bound for Q-Fractal (all points within |P|≤qRmax)
 };
 
 // Cache vị trí screen (canvas px) của mỗi điểm sau mỗi lần vẽ — dùng cho click detection
@@ -1006,6 +1013,7 @@ const LANG = {
     ctrlPrime:       'Số nguyên tố P',
     ctrlLayers:      'Số tầng',
     secQFractalCfg:  'Cấu hình Q-Fractal',
+    ctrlRmax:        'Bán kính R',
     primeOK:      '≡1(mod 3) ✓',
     primeWarn:    p => `≡${p%3}(mod 3) ⚠`,
     primeErr:     'Không phải SNT ✗',
@@ -1068,6 +1076,7 @@ const LANG = {
     ctrlPrime:       'Prime P',
     ctrlLayers:      'Layers',
     secQFractalCfg:  'Q-Fractal Config',
+    ctrlRmax:        'Radius R',
     primeOK:      '≡1(mod 3) ✓',
     primeWarn:    p => `≡${p%3}(mod 3) ⚠`,
     primeErr:     'Not prime ✗',
@@ -1096,7 +1105,7 @@ function generateAllPoints(method, maxN) {
   if (method === 0) return generateSquareGrid(maxN);
   if (method === 1) return generateEisenstein(maxN);
   if (method === 2) return generateOpenAI(maxN);
-  return generateQFractal(maxN);
+  return generateQFractal(maxN, state.qRmax);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -1118,7 +1127,9 @@ function generateAllPoints(method, maxN) {
 //  with N_CAND=24 we sample every 15°. D_MIN2=0.49 (d_min=0.7) prevents
 //  dense crowding; spacing self-regulates via posMap dedup + proximity check.
 // ══════════════════════════════════════════════════════════════════
-function generateQFractal(maxN) {
+function generateQFractal(maxN, rmax) {
+  const RMAX    = (rmax > 0) ? rmax : 1.0;  // bounding disk radius
+  const RMAX2   = RMAX * RMAX;
   const N_CAND  = 24;    // unit-circle sampling resolution (15° per step)
   const D_MIN2  = 0.49;  // min² spacing between any two placed points (d_min=0.7)
   const PREC    = 1e4;
@@ -1194,6 +1205,7 @@ function generateQFractal(maxN) {
   const heapKeys = new Set(); // posKey → avoid duplicate heap entries
 
   function hPush(cx, cy) {
+    if (cx * cx + cy * cy > RMAX2 + 1e-9) return;  // outside bounding disk
     const k = posKey(cx, cy);
     if (posMap.has(k) || heapKeys.has(k)) return;
     heapKeys.add(k);
@@ -2461,6 +2473,13 @@ function setPresetN(n) {
   });
 }
 
+function onSliderQRmax(val) {
+  state.qRmax = parseFloat(val);
+  document.getElementById('lbl-qrmax').textContent = state.qRmax.toFixed(1);
+  updateQFractalInfo();
+  doReset();
+}
+
 function onSliderSpeed(val) {
   // Log scale: slider 0→100 maps to speed 1→10000 (10^(val*4/100))
   const speed = Math.max(1, Math.round(Math.pow(10, +val * 4 / 100)));
@@ -2550,6 +2569,20 @@ function drawAlgQFractal(canvas, points) {
 
   const maxDepth = points.reduce((m, p) => Math.max(m, p.layer), 0) || 1;
 
+  // Draw bounding disk boundary (radius = state.qRmax)
+  {
+    const [ox, oy] = toC(0, 0);
+    const rPx = state.qRmax * scale;
+    ctx.save();
+    ctx.setLineDash([5, 4]);
+    ctx.strokeStyle = 'rgba(0,229,255,0.25)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(ox, oy, rPx, 0, 2 * Math.PI);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // Draw tree edges (parent→child)
   ctx.lineWidth = Math.max(0.4, 1.2 / view3d.zoom);
   for (let i = 1; i < points.length; i++) {
@@ -2577,21 +2610,22 @@ function drawAlgQFractal(canvas, points) {
   // Depth legend
   ctx.font = '10px monospace';
   ctx.fillStyle = '#6070a0';
-  ctx.fillText(`depth 0–${maxDepth}  |  n=${points.length}  |  candidate-pool, d_min=0.7`, 10, H - 10);
+  ctx.fillText(`depth 0–${maxDepth}  |  n=${points.length}  |  R≤${state.qRmax.toFixed(1)}, d_min=0.7`, 10, H - 10);
 }
 
 function updateQFractalInfo() {
   const el = document.getElementById('qfractal-info');
   if (!el) return;
+  const R = state.qRmax.toFixed(1);
   el.innerHTML = state.lang === 'vi'
-    ? `Sinh điểm theo pool ứng viên toàn cục — không có tham số K.<br>` +
-      `Mỗi điểm mới enqueue 24 vị trí chia đều (15°) + cross-angle vào heap.<br>` +
-      `Pop vị trí gần gốc nhất → kiểm tra d_min=0.7 + kết nối d=1 → thêm vào tập.<br>` +
-      `Mật độ tự điều chỉnh qua posMap dedup và kiểm tra khoảng cách tối thiểu.`
-    : `Point-by-point generation via global candidate pool — no K.<br>` +
-      `Each new point enqueues 24 evenly-spaced (15°) + cross-angle positions.<br>` +
-      `Pop closest-to-origin candidate → d_min=0.7 spacing + d=1 check → add.<br>` +
-      `Density self-regulates via posMap dedup and minimum spacing constraint.`;
+    ? `Sinh điểm trong đĩa bán kính <b>R = ${R}</b> — không có tham số K.<br>` +
+      `Mỗi điểm mới enqueue 24 vị trí (15°) + cross-angle vào heap.<br>` +
+      `Pop gần gốc nhất → lọc ngoài R, kiểm tra d_min=0.7 + kết nối d=1 → thêm.<br>` +
+      `Đường cyan đứt trên canvas = biên vòng tròn bán kính R.`
+    : `Points generated inside disk of radius <b>R = ${R}</b> — no K parameter.<br>` +
+      `Each new point enqueues 24 positions (15°) + cross-angle candidates.<br>` +
+      `Pop closest-to-origin → filter outside R, d_min=0.7 spacing + d=1 → add.<br>` +
+      `Dashed cyan circle on canvas = bounding disk boundary.`;
 }
 
 function drawFrame() {

@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/erdos_unit_distance_web.html" }
+  ]
+}

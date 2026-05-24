@@ -278,11 +278,18 @@
     border-radius: var(--radius);
     padding: 6px 8px;
   }
-  .stat-key { font-size: 9px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+  .stat-key { font-size: 9px; color: var(--muted); letter-spacing: 0.05em; }
   .stat-val { font-size: 15px; font-weight: 700; color: var(--cyan); margin-top: 1px; }
   .stat-val.green  { color: var(--green); }
   .stat-val.orange { color: var(--orange); }
   .stat-val.gold   { color: var(--gold); }
+  .stat-sub-label {
+    font-size: 9px; letter-spacing: 0.08em; text-transform: uppercase;
+    margin: 5px 0 3px; padding: 2px 5px;
+    border-radius: 3px; background: var(--panel2);
+  }
+  .stat-sub-label.emp   { color: var(--gold);   border-left: 2px solid var(--gold); }
+  .stat-sub-label.theory { color: var(--orange); border-left: 2px solid var(--orange); }
 
   /* Theory values */
   .theory-box {
@@ -485,13 +492,27 @@
           <div class="stat-key" data-i18n="statNu">ν(n) (cặp)</div>
           <div class="stat-val green" id="stat-nu">0</div>
         </div>
+      </div>
+      <div class="stat-sub-label emp" data-i18n="secStatsEmp">Thực nghiệm (từ dữ liệu đo)</div>
+      <div class="stat-grid">
         <div class="stat-box">
-          <div class="stat-key" data-i18n="statAlpha">α OLS (thực nghiệm)</div>
+          <div class="stat-key" data-i18n="statAlpha">Số mũ α — hồi quy OLS</div>
           <div class="stat-val gold" id="stat-alpha">—</div>
         </div>
         <div class="stat-box">
-          <div class="stat-key" data-i18n="statAlphaF">α công thức (giải tích)</div>
+          <div class="stat-key" data-i18n="statA">Hệ số A = ν(n) / nᵅ_OLS</div>
+          <div class="stat-val gold" id="stat-a">—</div>
+        </div>
+      </div>
+      <div class="stat-sub-label theory" data-i18n="secStatsTheory">Lý thuyết (α tiệm cận cố định)</div>
+      <div class="stat-grid">
+        <div class="stat-box">
+          <div class="stat-key" data-i18n="statAlphaF">Số mũ α — tiệm cận (n→∞)</div>
           <div class="stat-val orange" id="stat-alpha-formula">—</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-key" data-i18n="statAT">Hệ số A = ν(n) / nᵅ_lý thuyết</div>
+          <div class="stat-val orange" id="stat-a-theory">—</div>
         </div>
       </div>
     </div>
@@ -507,6 +528,21 @@
         </div>
         <div data-i18n-title="tvErdosTip" title="Công thức tiệm cận Erdős (n→∞). Chỉ hợp lệ với n rất lớn — hiển thị ⚠️ khi vượt cận trên S-T">
           <span class="t-label" data-i18n="tvErdos" style="font-size:10px;opacity:0.75">Erdős (tiệm cận): </span><span class="t-val" id="tv-erdos" style="font-size:11px">—</span>
+        </div>
+        <div style="border-top:1px solid var(--border);margin:5px 0 3px"></div>
+        <div title="Tỉ lệ số cặp đo được / cận trên S-T. Với mọi phương pháp hiện tại → 0% khi n→∞ vì α_thực < 4/3.">
+          <span class="t-label" data-i18n="tvEffST">ν/S-T (hiệu quả): </span>
+          <span class="t-val" id="tv-eff-st" style="color:var(--green)">—</span>
+        </div>
+        <div style="height:3px;border-radius:2px;background:var(--border);margin:2px 0 4px;overflow:hidden">
+          <div id="tv-eff-bar" style="height:100%;width:0%;background:var(--green);transition:width 0.4s"></div>
+        </div>
+        <div title="Gap exponent δ = 3·(α_OLS − 1): đo số mũ thực nghiệm nằm bao xa (%) giữa α=1 (tuyến tính) và α=4/3 (cận S-T). OpenAI ≈ 4.2%, chưa ai đạt 100%.">
+          <span class="t-label" data-i18n="tvGap">Gap δ = 3(α−1): </span>
+          <span class="t-val" id="tv-gap" style="color:var(--cyan)">—</span>
+        </div>
+        <div style="height:3px;border-radius:2px;background:var(--border);margin:2px 0;overflow:hidden">
+          <div id="tv-gap-bar" style="height:100%;width:0%;background:var(--cyan);transition:width 0.4s"></div>
         </div>
       </div>
     </div>
@@ -643,6 +679,17 @@ function runTheoryMode(method, maxN) {
   document.getElementById('stat-alpha').textContent =
     isNaN(alpha) ? '—' : alpha.toFixed(4);
 
+  const nuLast = last ? last.nu : 0;
+  // Empirical A (theory mode uses OLS alpha over log-spaced scan)
+  const A_emp = (!isNaN(alpha) && maxN > 0 && nuLast > 0)
+    ? nuLast / Math.pow(maxN, alpha) : NaN;
+  document.getElementById('stat-a').textContent = isNaN(A_emp) ? '—' : A_emp.toFixed(4);
+  // Theoretical A: fixed analytical α
+  const af_t = analyticalAlpha(method, maxN);
+  const A_th = (!isNaN(af_t) && maxN > 0 && nuLast > 0)
+    ? nuLast / Math.pow(maxN, af_t) : NaN;
+  document.getElementById('stat-a-theory').textContent = isNaN(A_th) ? '—' : A_th.toFixed(4);
+
   const n = maxN;
   const sv = stBound(n);
   const mv = computeNuTheory(method, n);
@@ -654,6 +701,24 @@ function runTheoryMode(method, maxN) {
     erdosEl.textContent = fmtN(Math.round(ev)) + (ev > sv ? ' ⚠️' : '');
     erdosEl.style.color = ev > sv ? 'var(--orange)' : '';
   } else { erdosEl.textContent = '—'; erdosEl.style.color = ''; }
+
+  // Efficiency metrics in theory mode
+  const nu_th = nuLast;
+  const effST_th = nu_th > 0 ? (nu_th / sv * 100) : 0;
+  const effEl = document.getElementById('tv-eff-st');
+  effEl.textContent = effST_th.toFixed(1) + '%';
+  effEl.style.color = effST_th > 66 ? 'var(--green)' : effST_th > 33 ? 'var(--gold)' : 'var(--muted)';
+  document.getElementById('tv-eff-bar').style.width = Math.min(effST_th, 100).toFixed(1) + '%';
+  document.getElementById('tv-eff-bar').style.background = effEl.style.color;
+
+  const gap_th = !isNaN(alpha) ? Math.max(0, 3 * (alpha - 1) * 100) : NaN;
+  const gapEl = document.getElementById('tv-gap');
+  gapEl.textContent = isNaN(gap_th) ? '—' : gap_th.toFixed(2) + '%';
+  gapEl.style.color = gap_th > 10 ? 'var(--green)' : gap_th > 3 ? 'var(--cyan)' : 'var(--muted)';
+  if (!isNaN(gap_th)) {
+    document.getElementById('tv-gap-bar').style.width = Math.min(gap_th, 100).toFixed(2) + '%';
+    document.getElementById('tv-gap-bar').style.background = gapEl.style.color;
+  }
 
   // α công thức trong theory mode
   const af = analyticalAlpha(method, n);
@@ -786,14 +851,22 @@ const LANG = {
     btnUnitTitle: 'Hiện/ẩn vòng tròn tham chiếu khoảng cách 1',
     statN:        'n (điểm)',
     statNu:       'ν(n) (cặp)',
-    statAlpha:    'α OLS (thực nghiệm)',
-    statAlphaF:   'α công thức (giải tích)',
+    secStatsEmp:   'Thực nghiệm (từ dữ liệu đo)',
+    secStatsTheory:'Lý thuyết (α tiệm cận cố định)',
+    statAlpha:     'Số mũ α — hồi quy OLS',
+    statAlphaF:    'Số mũ α — tiệm cận (n→∞)',
+    statA:         'Hệ số A = ν(n) / nᵅ_OLS',
+    statAT:        'Hệ số A = ν(n) / nᵅ_lý thuyết',
     tvMethod:     'ν̂ phương pháp: ',
     tvST:         'Cận trên S-T: ',
     tvErdos:      'Erdős (tiệm cận): ',
+    tvEffST:      'ν/S-T (hiệu quả): ',
+    tvGap:        'Gap δ = 3(α−1): ',
     tvMethodTip:  'Số cặp tính theo công thức chính xác/xấp xỉ của phương pháp đang chọn',
     tvSTTip:      'Cận trên Spencer-Tardos: không có cấu hình nào vượt được mức này',
     tvErdosTip:   'Công thức tiệm cận Erdős (n→∞). Chỉ hợp lệ với n rất lớn — hiển thị ⚠️ khi vượt cận trên S-T',
+    tvEffSTTip:   'Tỉ lệ cặp đo được / cận trên S-T. Mọi phương pháp → 0% khi n→∞ vì α_thực < 4/3',
+    tvGapTip:     'Gap exponent δ = 3(α−1): đo α_OLS nằm bao xa (%) giữa α=1 (tuyến tính) và α=4/3 (S-T). OpenAI ≈ 4.2%',
     infoPlaceholder: 'Chọn phương pháp để xem thông tin.',
     algLabel:     'Không gian đại số — kéo: pan · cuộn: zoom · (OpenAI) phải/Shift: pan, trái: xoay · dbl: reset',
     projLabel:    'Mặt phẳng 2D — cặp khoảng cách = 1 · kéo: di chuyển · cuộn: zoom · double-click: reset',
@@ -837,14 +910,22 @@ const LANG = {
     btnUnitTitle: 'Show/hide unit distance reference circle',
     statN:        'n (points)',
     statNu:       'ν(n) (pairs)',
-    statAlpha:    'α OLS (empirical)',
-    statAlphaF:   'α formula (analytical)',
+    secStatsEmp:   'Empirical (from measured data)',
+    secStatsTheory:'Theory (fixed asymptotic α)',
+    statAlpha:     'Exponent α — OLS regression',
+    statAlphaF:    'Exponent α — asymptotic (n→∞)',
+    statA:         'Coefficient A = ν(n) / nᵅ_OLS',
+    statAT:        'Coefficient A = ν(n) / nᵅ_theory',
     tvMethod:     'ν̂ method: ',
     tvST:         'S-T upper bound: ',
     tvErdos:      'Erdős (asymptotic): ',
+    tvEffST:      'ν/S-T (efficiency): ',
+    tvGap:        'Gap δ = 3(α−1): ',
     tvMethodTip:  'Pair count using exact/approx formula for the selected method',
     tvSTTip:      'Spencer-Tardos upper bound: no configuration can exceed this',
     tvErdosTip:   'Erdős asymptotic formula (n→∞). Valid only for very large n — shows ⚠️ when exceeding S-T bound',
+    tvEffSTTip:   'Ratio of measured pairs / S-T upper bound. All methods → 0% as n→∞ since α < 4/3',
+    tvGapTip:     'Gap exponent δ = 3(α−1): how far α_OLS lies (%) between α=1 (linear) and α=4/3 (S-T). OpenAI ≈ 4.2%',
     infoPlaceholder: 'Select a method to view info.',
     algLabel:     'Algebraic space — drag: pan · scroll: zoom · (OpenAI) right/Shift: pan, left: rotate · dbl: reset',
     projLabel:    '2D plane — unit-distance pairs · drag: pan · scroll: zoom · dbl-click: reset',
@@ -911,35 +992,46 @@ function generateEisenstein(maxN) {
   return candidates.slice(0, maxN).map(({ x, y, a, b, layer }) => ({ x, y, a, b, layer }));
 }
 
+// Compute per-layer point counts for equal density per unit area.
+// Layer j has cell area ∝ P^{-j}, so n_j ∝ P^j ensures the same number of
+// points per unit physical area across all layers.
+function computeLayerCounts(maxN, P, L) {
+  const weights = Array.from({length: L}, (_, j) => Math.pow(P, j));
+  const totalW  = weights.reduce((s, w) => s + w, 0);
+  const counts  = weights.map(w => Math.max(1, Math.floor(maxN * w / totalW)));
+  let assigned  = counts.reduce((s, c) => s + c, 0);
+  // Distribute remainder to layers with largest fractional parts
+  const fracs = weights.map((w, j) => ({ j, frac: (maxN * w / totalW) - counts[j] }));
+  fracs.sort((a, b) => b.frac - a.frac);
+  for (let i = 0; i < maxN - assigned; i++) counts[fracs[i].j]++;
+  return counts;
+}
+
 function generateOpenAI(maxN) {
   const P = state.prime;
   const L = state.numLayers;
   const SQ3_2 = Math.sqrt(3) / 2;
-  const R = Math.ceil(Math.sqrt(maxN / L)) + 4;
 
-  // Build sorted candidate list per layer
-  const layerCands = [];
+  // n_j ∝ P^j so all layers cover the same physical disk with equal density
+  const counts = computeLayerCounts(maxN, P, L);
+
+  // Build sorted candidate list per layer, using per-layer search radius
+  const pts = [];
   for (let lyr = 0; lyr < L; lyr++) {
     const scale = Math.pow(P, -lyr / 2); // 1, 1/√P, 1/P, 1/P√P, ...
+    const R = Math.ceil(Math.sqrt(counts[lyr])) + 8; // lattice-coord search radius
     const cands = [];
     for (let a = -R; a <= R; a++)
       for (let b = -R; b <= R; b++) {
         const bx = a + b * 0.5, by = b * SQ3_2;
         const x = bx * scale, y = by * scale;
-        cands.push({ x, y, a, b, layer: lyr, d2: x*x + y*y });
+        cands.push({ x, y, a, b, d2: x*x + y*y });
       }
     cands.sort((u, v) => u.d2 - v.d2);
-    layerCands.push(cands);
+    pts.push(...cands.slice(0, counts[lyr]).map(p =>
+      ({ x: p.x, y: p.y, a: p.a, b: p.b, layer: lyr, d2: p.d2 })));
   }
 
-  // Distribute evenly: floor(maxN/L) per layer, remainder to first layers
-  const nBase  = Math.floor(maxN / L);
-  const nExtra = maxN % L;
-  const pts = [];
-  for (let lyr = 0; lyr < L; lyr++) {
-    const n = nBase + (lyr < nExtra ? 1 : 0);
-    pts.push(...layerCands[lyr].slice(0, n));
-  }
   pts.sort((u, v) => u.d2 - v.d2);
   return pts.slice(0, maxN).map(({ x, y, a, b, layer }) => ({ x, y, a, b, layer }));
 }
@@ -990,30 +1082,15 @@ function gridTheory(n) {
   return Math.pow(n, 1 + 0.626 / ll);
 }
 function openAITheory(n) { return Math.pow(n, 1.014); }
-function stBound(n) { return 0.5 * Math.pow(n, 4 / 3); }
+function stBound(n) { return Math.pow(n, 4 / 3); }
 
-// ── Công thức giải tích α(n) = d(ln ν)/d(ln n) ────────────────────
-// Dạng tổng quát: ν = A·n − B·√n  →  α = (2A√n − B) / (2(A√n − B))
-// Lưới Vuông:    A=2, B=2   →  α = (2√n−1) / (2(√n−1))
-// Lưới Lục Giác: A=3, B≈4.948 →  α = (6√n−4.948) / (2(3√n−4.948))
-// OpenAI:        α = 1.014 (hằng số lý thuyết)
-const _EISEN_B = 1.5 * Math.sqrt(2 * Math.PI * Math.sqrt(3)); // ≈ 4.948
-function analyticalAlpha(method, n) {
-  if (n < 4) return NaN;
-  const t = Math.sqrt(n);
-  if (method === 0) {
-    // Vuông: ν = 2n − 2√n
-    return (2 * t - 1) / (2 * (t - 1));
-  }
-  if (method === 1) {
-    // Eisenstein: ν = 3n − B·√n
-    const B = _EISEN_B;
-    const denom = 2 * (3 * t - B);
-    if (Math.abs(denom) < 1e-9) return NaN;
-    return (6 * t - B) / denom;
-  }
-  // OpenAI: α cố định theo lý thuyết
-  return 1.014;
+// ── α lý thuyết tiệm cận (n→∞) — dùng cho section "Lý thuyết" trong stats ──
+// Lưới Vuông:    ν(n) = 2n − 2√n  →  α → 1  khi n→∞  →  A_theory = ν/n → 2
+// CM Eisenstein: ν(n) = 3n − B√n  →  α → 1  khi n→∞  →  A_theory = ν/n → 3
+// OpenAI:        ν(n) ~ A·n^{1.014}  →  α = 1.014 (hằng số lý thuyết từ bài báo)
+function analyticalAlpha(method /*, n unused */) {
+  if (method === 2) return 1.014;
+  return 1.0;   // Vuông và Eisenstein đều tiệm cận α = 1
 }
 
 function theoryLinePoints(fn, min = 10, max = 10000000000, steps = 100) {
@@ -1811,6 +1888,14 @@ function updateUI() {
   document.getElementById('stat-alpha-formula').textContent =
     isNaN(alphaFormula) ? '—' : alphaFormula.toFixed(4);
 
+  // Empirical A: uses OLS-estimated α
+  const A = (!isNaN(alpha) && n > 0 && nu > 0) ? nu / Math.pow(n, alpha) : NaN;
+  document.getElementById('stat-a').textContent = isNaN(A) ? '—' : A.toFixed(4);
+
+  // Theoretical A: uses fixed analytical α (e.g. 1.014 for OpenAI)
+  const AT = (!isNaN(alphaFormula) && n > 0 && nu > 0) ? nu / Math.pow(n, alphaFormula) : NaN;
+  document.getElementById('stat-a-theory').textContent = isNaN(AT) ? '—' : AT.toFixed(4);
+
   if (n >= 3) {
     const sv = stBound(n);
     const mv = computeNuTheory(state.method, n);
@@ -1820,11 +1905,32 @@ function updateUI() {
     const erdosEl = document.getElementById('tv-erdos');
     erdosEl.textContent = isFinite(ev) ? fmtN(Math.round(ev)) + (ev > sv ? ' ⚠️' : '') : '—';
     erdosEl.style.color = (isFinite(ev) && ev > sv) ? 'var(--orange)' : '';
+
+    // Efficiency metrics
+    const effST = nu > 0 ? (nu / sv * 100) : 0;
+    const effEl = document.getElementById('tv-eff-st');
+    effEl.textContent = effST.toFixed(1) + '%';
+    effEl.style.color = effST > 66 ? 'var(--green)' : effST > 33 ? 'var(--gold)' : 'var(--muted)';
+    document.getElementById('tv-eff-bar').style.width = Math.min(effST, 100).toFixed(1) + '%';
+    document.getElementById('tv-eff-bar').style.background = effEl.style.color;
+
+    const gap = !isNaN(alpha) ? Math.max(0, 3 * (alpha - 1) * 100) : NaN;
+    const gapEl = document.getElementById('tv-gap');
+    gapEl.textContent = isNaN(gap) ? '—' : gap.toFixed(2) + '%';
+    gapEl.style.color = gap > 10 ? 'var(--green)' : gap > 3 ? 'var(--cyan)' : 'var(--muted)';
+    if (!isNaN(gap)) {
+      document.getElementById('tv-gap-bar').style.width = Math.min(gap, 100).toFixed(2) + '%';
+      document.getElementById('tv-gap-bar').style.background = gapEl.style.color;
+    }
   } else {
     document.getElementById('tv-method').textContent = '—';
     document.getElementById('tv-st').textContent     = '—';
     document.getElementById('tv-erdos').textContent  = '—';
     document.getElementById('tv-erdos').style.color  = '';
+    document.getElementById('tv-eff-st').textContent = '—';
+    document.getElementById('tv-eff-bar').style.width = '0%';
+    document.getElementById('tv-gap').textContent    = '—';
+    document.getElementById('tv-gap-bar').style.width = '0%';
   }
 }
 
@@ -2185,13 +2291,18 @@ function updateLayerInfo() {
   const P = state.prime;
   const L = state.numLayers;
   const lang = state.lang;
+  // Compute proportional weights (n_j ∝ P^j) for display
+  const weights = Array.from({length: L}, (_, j) => Math.pow(P, j));
+  const totalW  = weights.reduce((s, w) => s + w, 0);
   let html = '';
   for (let j = 0; j < L; j++) {
     // Within-layer neighbors: 6; cross-layer (j>0 vs Layer 0): 6(j+1)
     const nb = j === 0
       ? (lang === 'vi' ? '6 hàng xóm nội tầng' : '6 within-layer neighbors')
       : `${6*(j+1)} ${lang === 'vi' ? 'hàng xóm → T1' : 'neighbors → L1'}`;
-    html += LANG[lang].layerRowVI(j, P, nb) + '<br>';
+    const pct = (100 * weights[j] / totalW).toFixed(1);
+    html += LANG[lang].layerRowVI(j, P, nb)
+          + ` · <span style="color:var(--muted)">~${pct}%</span><br>`;
   }
   el.innerHTML = html;
 }

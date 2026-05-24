@@ -1200,11 +1200,44 @@ function generateQFractal(maxN) {
     return count;
   }
 
-  // ── BFS ──
-  addPt(0, 0, 0, -1);
-  let qi = 0;
+  // ── Min-heap sorted by distance² from origin ──────────────────
+  // Ensures the fractal always expands from the node closest to
+  // the origin, producing a compact circular growth front instead
+  // of arbitrary BFS-layer order.
+  const heap = [];
+  function heapPush(idx) {
+    const p = pts[idx];
+    heap.push({ idx, d2: p.x * p.x + p.y * p.y });
+    let i = heap.length - 1;
+    while (i > 0) {
+      const par = (i - 1) >> 1;
+      if (heap[par].d2 <= heap[i].d2) break;
+      const tmp = heap[par]; heap[par] = heap[i]; heap[i] = tmp;
+      i = par;
+    }
+  }
+  function heapPop() {
+    if (heap.length === 1) return heap.pop().idx;
+    const minIdx = heap[0].idx;
+    heap[0] = heap.pop();
+    let i = 0;
+    for (;;) {
+      const l = 2 * i + 1, r = 2 * i + 2;
+      let s = i;
+      if (l < heap.length && heap[l].d2 < heap[s].d2) s = l;
+      if (r < heap.length && heap[r].d2 < heap[s].d2) s = r;
+      if (s === i) break;
+      const tmp = heap[i]; heap[i] = heap[s]; heap[s] = tmp;
+      i = s;
+    }
+    return minIdx;
+  }
 
-  while (pts.length < maxN && qi < pts.length) {
+  // ── Priority-queue expansion ────────────────────────────────────
+  heapPush(addPt(0, 0, 0, -1));
+
+  while (pts.length < maxN && heap.length > 0) {
+    const qi = heapPop();
     const { x, y, layer } = pts[qi];
     const nearby = lhNearby(x, y);   // existing points within reach
 
@@ -1242,11 +1275,11 @@ function generateQFractal(maxN) {
         bestAngle = sMin + Math.random() * SECTOR;
       }
 
-      addPt(x + Math.cos(bestAngle),
-            y + Math.sin(bestAngle),
-            layer + 1, qi);
+      const childIdx = addPt(x + Math.cos(bestAngle),
+                             y + Math.sin(bestAngle),
+                             layer + 1, qi);
+      if (childIdx !== -1) heapPush(childIdx);
     }
-    qi++;
   }
 
   return pts.slice(0, maxN);

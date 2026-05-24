@@ -1108,17 +1108,18 @@ function generateAllPoints(method, maxN) {
 }
 
 // ══════════════════════════════════════════════════════════════════
-//  Q-FRACTAL GENERATION  (Direction 2 — cross-branch alignment)
-//  BFS fractal tree: each node → K children on unit circle,
-//  one per angular sector of size 2π/K.
-//  For each sector, we search for an angle that places the child
-//  at unit distance from an existing nearby point (not just the
-//  parent), creating deliberate cross-branch pairs.
-//  Fallback: random angle within sector when no alignment found.
+//  Q-FRACTAL GENERATION  (adaptive global selection)
+//  Priority queue (min-dist from origin) drives expansion.
+//  Each node evaluates N_CAND evenly-spaced angles + cross-angles,
+//  scores all by (pairs DESC, minD2 DESC), then greedily selects
+//  up to K children that are at least MIN_SEP = 2π/K apart.
+//  K is a maximum — nodes in sparse areas may spawn fewer children.
+//  No randomness; deterministic and fully reproducible.
 // ══════════════════════════════════════════════════════════════════
 function generateQFractal(maxN) {
   const K      = state.qK;
-  const SECTOR = (2 * Math.PI) / K;
+  const MIN_SEP = (2 * Math.PI) / K;   // min angular gap between chosen children
+  const N_CAND  = Math.max(36, K * 6); // evenly-spaced evaluation grid resolution
   const PREC   = 1e4;         // position dedup precision
   const TWO_PI = 2 * Math.PI;
 
@@ -1225,62 +1226,57 @@ function generateQFractal(maxN) {
   while (pts.length < maxN && heap.length > 0) {
     const qi = heapPop();
     const { x, y, layer } = pts[qi];
-    const nearby = lhNearby(x, y);   // existing points within reach
+    const nearby = lhNearby(x, y);
 
-    for (let j = 0; j < K; j++) {
-      if (pts.length >= maxN) break;
+    // ── 1. Build candidate pool ─────────────────────────────────
+    // (a) Evenly-spaced grid across full circle — no randomness
+    const cands = [];
+    for (let i = 0; i < N_CAND; i++)
+      cands.push(TWO_PI * i / N_CAND);
+    // (b) Cross-angle candidates (analytically exact unit-distance)
+    for (const ni of nearby) {
+      if (ni === qi) continue;
+      const q = pts[ni];
+      for (const θ of crossAngles(x, y, q.x, q.y))
+        cands.push(normAngle(θ));
+    }
 
-      const sMin = j * SECTOR;
-      const sMax = (j + 1) * SECTOR;  // last sector: sMax = 2π (< is always ok)
-
-      // ── Collect candidates ────────────────────────────────────────
-      // 1. Cross-angle candidates (guaranteed ≥1 extra pair each)
-      const candidates = [];
+    // ── 2. Score every candidate ────────────────────────────────
+    // Primary  : pairs  ↑  (unit-distance connections)
+    // Tiebreak : minD2  ↑  (gap-filling — prefer isolated spots)
+    const scored = [];
+    for (const θ of cands) {
+      const cx = x + Math.cos(θ), cy = y + Math.sin(θ);
+      if (posMap.has(posKey(cx, cy))) continue;
+      let pairs = 0, minD2 = Infinity;
       for (const ni of nearby) {
-        if (ni === qi) continue;
         const q = pts[ni];
-        for (const θ of crossAngles(x, y, q.x, q.y)) {
-          const nt = normAngle(θ);
-          if (nt >= sMin && nt < sMax) candidates.push(θ);
-        }
+        const ddx = cx - q.x, ddy = cy - q.y, d2 = ddx * ddx + ddy * ddy;
+        if (Math.abs(d2 - 1.0) < EPS) pairs++;
+        if (ni !== qi && d2 < minD2) minD2 = d2;
       }
-      // 2. Random gap-filling samples — always included so the fallback
-      //    explores the sector and picks the least-crowded position.
-      const N_GAP = 6;
-      for (let t = 0; t < N_GAP; t++)
-        candidates.push(sMin + Math.random() * SECTOR);
+      scored.push({ θ, pairs, minD2: minD2 === Infinity ? 0 : minD2 });
+    }
+    scored.sort((a, b) => b.pairs - a.pairs || b.minD2 - a.minD2);
 
-      // ── Score all candidates: (pairs DESC, minD2 DESC) ───────────
-      // Primary:   maximise unit-distance pair count  (connectivity)
-      // Tiebreak:  maximise min-dist to nearest non-parent neighbour
-      //            (gap-filling — avoids clustering)
-      let bestAngle = null;
-      let bestPairs = -1;
-      let bestMinD2 = -1;
-
-      for (const θ of candidates) {
-        const cx = x + Math.cos(θ), cy = y + Math.sin(θ);
-        if (posMap.has(posKey(cx, cy))) continue;
-        let pairs = 0, minD2 = Infinity;
-        for (const ni of nearby) {
-          const q = pts[ni];
-          const ddx = cx - q.x, ddy = cy - q.y;
-          const d2 = ddx * ddx + ddy * ddy;
-          if (Math.abs(d2 - 1.0) < EPS) pairs++;
-          if (ni !== qi && d2 < minD2) minD2 = d2;
-        }
-        if (minD2 === Infinity) minD2 = 0;
-        if (pairs > bestPairs || (pairs === bestPairs && minD2 > bestMinD2)) {
-          bestPairs = pairs; bestMinD2 = minD2; bestAngle = θ;
-        }
+    // ── 3. Greedy selection: up to K children, ≥ MIN_SEP apart ──
+    // Flexible K: fewer children selected if not enough good spots.
+    const chosen = [];
+    for (const { θ } of scored) {
+      if (chosen.length >= K || pts.length + chosen.length >= maxN) break;
+      let ok = true;
+      for (const φ of chosen) {
+        let d = Math.abs(θ - φ) % TWO_PI;
+        if (d > Math.PI) d = TWO_PI - d;
+        if (d < MIN_SEP) { ok = false; break; }
       }
+      if (ok) chosen.push(θ);
+    }
 
-      // Safety net (all candidates collided with existing points)
-      if (bestAngle === null) bestAngle = sMin + Math.random() * SECTOR;
-
-      const childIdx = addPt(x + Math.cos(bestAngle),
-                             y + Math.sin(bestAngle),
-                             layer + 1, qi);
+    // ── 4. Add children to point set and heap ───────────────────
+    for (const θ of chosen) {
+      if (pts.length >= maxN) break;
+      const childIdx = addPt(x + Math.cos(θ), y + Math.sin(θ), layer + 1, qi);
       if (childIdx !== -1) heapPush(childIdx);
     }
   }

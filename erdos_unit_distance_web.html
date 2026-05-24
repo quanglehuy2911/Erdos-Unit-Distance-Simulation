@@ -1228,11 +1228,27 @@ function generateQFractal(maxN) {
     const { x, y, layer } = pts[qi];
     const nearby = lhNearby(x, y);
 
+    // ── Adaptive K: scale with circumference at this radius ──────
+    // A circle of radius r has circumference 2πr. To keep density
+    // uniform (≈1 point per unit arc), we need ~2πr children around
+    // that ring collectively. Each node at radius r contributes a
+    // 1/count fraction of the ring, but we approximate per-node by
+    // K_eff = max(K, round(2π·r)) where r = dist from origin.
+    // Clamped to [K, K_MAX] so inner nodes use at least K children
+    // and outer nodes scale up naturally.
+    const K_MAX  = K * 4;            // absolute ceiling
+    const r      = Math.sqrt(x * x + y * y);
+    const K_eff  = r < 0.5           // root node: use base K
+                 ? K
+                 : Math.min(K_MAX, Math.max(K, Math.round(TWO_PI * r)));
+    const minSep = TWO_PI / K_eff;   // angular gap for this node
+    const nCand  = Math.max(N_CAND, K_eff * 4); // finer grid for large K_eff
+
     // ── 1. Build candidate pool ─────────────────────────────────
     // (a) Evenly-spaced grid across full circle — no randomness
     const cands = [];
-    for (let i = 0; i < N_CAND; i++)
-      cands.push(TWO_PI * i / N_CAND);
+    for (let i = 0; i < nCand; i++)
+      cands.push(TWO_PI * i / nCand);
     // (b) Cross-angle candidates (analytically exact unit-distance)
     for (const ni of nearby) {
       if (ni === qi) continue;
@@ -1259,16 +1275,15 @@ function generateQFractal(maxN) {
     }
     scored.sort((a, b) => b.pairs - a.pairs || b.minD2 - a.minD2);
 
-    // ── 3. Greedy selection: up to K children, ≥ MIN_SEP apart ──
-    // Flexible K: fewer children selected if not enough good spots.
+    // ── 3. Greedy selection: up to K_eff children, ≥ minSep apart ─
     const chosen = [];
     for (const { θ } of scored) {
-      if (chosen.length >= K || pts.length + chosen.length >= maxN) break;
+      if (chosen.length >= K_eff || pts.length + chosen.length >= maxN) break;
       let ok = true;
       for (const φ of chosen) {
         let d = Math.abs(θ - φ) % TWO_PI;
         if (d > Math.PI) d = TWO_PI - d;
-        if (d < MIN_SEP) { ok = false; break; }
+        if (d < minSep) { ok = false; break; }
       }
       if (ok) chosen.push(θ);
     }

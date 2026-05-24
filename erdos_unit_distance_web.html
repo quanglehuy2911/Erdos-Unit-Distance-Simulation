@@ -1186,20 +1186,6 @@ function generateQFractal(maxN) {
     return [alpha + beta, alpha - beta];
   }
 
-  // Count how many points in nearbyList are at unit distance from (cx,cy).
-  // Uses the SAME EPS as the global isUnitPair (1e-8) so that scoring
-  // exactly predicts what the actual pair counter will count later.
-  // Cross-angle floating-point errors are ~1e-13, well within this bound.
-  function countPairs(cx, cy, nearbyList) {
-    let count = 0;
-    for (const ni of nearbyList) {
-      const q = pts[ni];
-      const ddx = cx - q.x, ddy = cy - q.y;
-      if (Math.abs(ddx * ddx + ddy * ddy - 1.0) < EPS) count++;
-    }
-    return count;
-  }
-
   // ── Min-heap sorted by distance² from origin ──────────────────
   // Ensures the fractal always expands from the node closest to
   // the origin, producing a compact circular growth front instead
@@ -1247,7 +1233,8 @@ function generateQFractal(maxN) {
       const sMin = j * SECTOR;
       const sMax = (j + 1) * SECTOR;  // last sector: sMax = 2π (< is always ok)
 
-      // ── Step 1: collect ALL cross-angle candidates in this sector ──
+      // ── Collect candidates ────────────────────────────────────────
+      // 1. Cross-angle candidates (guaranteed ≥1 extra pair each)
       const candidates = [];
       for (const ni of nearby) {
         if (ni === qi) continue;
@@ -1257,23 +1244,39 @@ function generateQFractal(maxN) {
           if (nt >= sMin && nt < sMax) candidates.push(θ);
         }
       }
+      // 2. Random gap-filling samples — always included so the fallback
+      //    explores the sector and picks the least-crowded position.
+      const N_GAP = 6;
+      for (let t = 0; t < N_GAP; t++)
+        candidates.push(sMin + Math.random() * SECTOR);
 
-      // ── Step 2: score each candidate — pick the one that creates the most pairs ──
+      // ── Score all candidates: (pairs DESC, minD2 DESC) ───────────
+      // Primary:   maximise unit-distance pair count  (connectivity)
+      // Tiebreak:  maximise min-dist to nearest non-parent neighbour
+      //            (gap-filling — avoids clustering)
       let bestAngle = null;
-      let bestScore = -1;
+      let bestPairs = -1;
+      let bestMinD2 = -1;
 
       for (const θ of candidates) {
-        const cx = x + Math.cos(θ);
-        const cy = y + Math.sin(θ);
-        if (posMap.has(posKey(cx, cy))) continue;   // skip collisions
-        const score = countPairs(cx, cy, nearby);   // counts parent pair too
-        if (score > bestScore) { bestScore = score; bestAngle = θ; }
+        const cx = x + Math.cos(θ), cy = y + Math.sin(θ);
+        if (posMap.has(posKey(cx, cy))) continue;
+        let pairs = 0, minD2 = Infinity;
+        for (const ni of nearby) {
+          const q = pts[ni];
+          const ddx = cx - q.x, ddy = cy - q.y;
+          const d2 = ddx * ddx + ddy * ddy;
+          if (Math.abs(d2 - 1.0) < EPS) pairs++;
+          if (ni !== qi && d2 < minD2) minD2 = d2;
+        }
+        if (minD2 === Infinity) minD2 = 0;
+        if (pairs > bestPairs || (pairs === bestPairs && minD2 > bestMinD2)) {
+          bestPairs = pairs; bestMinD2 = minD2; bestAngle = θ;
+        }
       }
 
-      // ── Step 3: fallback — random angle within sector ──
-      if (bestAngle === null) {
-        bestAngle = sMin + Math.random() * SECTOR;
-      }
+      // Safety net (all candidates collided with existing points)
+      if (bestAngle === null) bestAngle = sMin + Math.random() * SECTOR;
 
       const childIdx = addPt(x + Math.cos(bestAngle),
                              y + Math.sin(bestAngle),

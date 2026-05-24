@@ -444,7 +444,7 @@
         <span class="ctrl-label" data-i18n="ctrlSpeed">Tốc độ (đ/s)</span>
         <span class="ctrl-val" id="lbl-speed">8</span>
       </div>
-      <input type="range" id="sl-speed" min="1" max="50" value="8" oninput="onSliderSpeed(this.value)">
+      <input type="range" id="sl-speed" min="0" max="100" value="23" oninput="onSliderSpeed(this.value)">
     </div>
 
     <!-- OpenAI-specific config (shown only when method 2 is active) -->
@@ -606,7 +606,17 @@ function getLayerScaleStr(j, P) {
 }
 
 // Points above this threshold use theory-only mode (no animation)
-const RENDER_THRESHOLD = 5000;
+const RENDER_THRESHOLD = 1000000;
+
+// Spatial hash for O(1) unit-pair lookup (cell size = 1 = unit distance)
+let spatialHash = new Map();
+function _shKey(x, y) { return `${Math.floor(x)},${Math.floor(y)}`; }
+function _shAdd(idx, p) {
+  const k = _shKey(p.x, p.y);
+  let cell = spatialHash.get(k);
+  if (!cell) { cell = []; spatialHash.set(k, cell); }
+  cell.push(idx);
+}
 
 // Format a large number for display: 72200000000 → "72.2B"
 function fmtN(n) {
@@ -754,7 +764,7 @@ function hideTheoryOverlay() {
 let state = {
   method: 0,
   maxN: 500,
-  speed: 8,
+  speed: Math.max(1, Math.round(Math.pow(10, 23 * 4 / 100))),   // slider=23 → ~8 pts/s
   playing: false,
   points: [],        // {x, y, layer, a, b}
   pairs: [],         // {i, j} unit-distance pairs
@@ -1047,9 +1057,18 @@ function isUnitPair(p, q) {
 function findNewPairs(points, newIdx) {
   const p = points[newIdx];
   const newPairs = [];
-  for (let i = 0; i < newIdx; i++) {
-    if (isUnitPair(p, points[i])) newPairs.push({ i, j: newIdx });
+  // Spatial hash: only check 3×3 neighboring cells (radius = 1 unit)
+  const gx = Math.floor(p.x), gy = Math.floor(p.y);
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      const cell = spatialHash.get(`${gx + dx},${gy + dy}`);
+      if (!cell) continue;
+      for (const i of cell) {
+        if (isUnitPair(p, points[i])) newPairs.push({ i, j: newIdx });
+      }
+    }
   }
+  _shAdd(newIdx, p);   // register new point in hash for future queries
   return newPairs;
 }
 
@@ -2078,8 +2097,10 @@ function doReset() {
   state.flashes = [];
   state.history = [];
   state.lastAddTime = 0;
+  state.lastDrawTime = 0;
   state.selectedIdx = null;
   _lastAlgPos = []; _lastProjPos = [];
+  spatialHash = new Map();
 
   if (state.maxN > RENDER_THRESHOLD) {
     // Theory-only mode: show a small sample visually, compute ν by formula
@@ -2087,7 +2108,8 @@ function doReset() {
     allPoints = [];
     const samplePts = generateAllPoints(state.method, sampleN);
     state.points = samplePts;
-    // Find all pairs for the sample
+    // Find all pairs for the sample (seed point 0 into hash, then process 1..n-1)
+    if (samplePts.length > 0) _shAdd(0, samplePts[0]);
     for (let i = 1; i < samplePts.length; i++) {
       const newPs = findNewPairs(state.points, i);
       state.pairs.push(...newPs);
@@ -2135,8 +2157,10 @@ function setPresetN(n) {
 }
 
 function onSliderSpeed(val) {
-  state.speed = +val;
-  document.getElementById('lbl-speed').textContent = val;
+  // Log scale: slider 0→100 maps to speed 1→10000 (10^(val*4/100))
+  const speed = Math.max(1, Math.round(Math.pow(10, +val * 4 / 100)));
+  state.speed = speed;
+  document.getElementById('lbl-speed').textContent = speed >= 1000 ? Math.round(speed/100)*100 : speed;
 }
 
 function toggleUnitRef() {
@@ -2183,12 +2207,14 @@ function addNextPoint(now) {
   const n = state.points.length, nu = state.pairs.length;
   state.history.push({ n, nu });
 
-  // Push to chart (every step or every few steps for performance)
+  // Throttle stat & chart updates for large n (avoid 1M DOM writes)
+  const uiStep = Math.max(1, Math.floor(state.maxN / 200));
+  if (n % uiStep === 0 || n === state.maxN) {
+    updateUI();
+  }
   if (n % Math.max(1, Math.floor(state.maxN / 80)) === 0 || n === state.maxN) {
     pushChartPoint(state.method, n, nu);
   }
-
-  updateUI();
 }
 
 function drawFrame() {
@@ -2221,7 +2247,14 @@ function tick(now) {
     addNextPoint(now);
   }
 
-  drawFrame();
+  // Throttle canvas redraw for large n to maintain responsiveness:
+  // ≤10K: every frame (60fps); ≤100K: ~20fps; ≤1M: ~8fps
+  const n = state.points.length;
+  const drawIntervalMs = n > 100000 ? 125 : n > 10000 ? 50 : 0;
+  if (now - (state.lastDrawTime || 0) >= drawIntervalMs) {
+    state.lastDrawTime = now;
+    drawFrame();
+  }
 
   if (state.playing) requestAnimationFrame(tick);
 }

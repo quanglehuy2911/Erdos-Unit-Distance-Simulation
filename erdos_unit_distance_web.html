@@ -440,6 +440,34 @@
       <input type="range" id="sl-speed" min="1" max="50" value="8" oninput="onSliderSpeed(this.value)">
     </div>
 
+    <!-- OpenAI-specific config (shown only when method 2 is active) -->
+    <div id="openai-cfg" style="display:none">
+      <div class="section-label" data-i18n="secOpenAICfg">Cấu hình OpenAI</div>
+      <div class="ctrl-row">
+        <span class="ctrl-label" data-i18n="ctrlPrime">Số nguyên tố P</span>
+        <span id="prime-status" style="font-size:9px;color:var(--green)">≡1(mod 3) ✓</span>
+      </div>
+      <div class="n-input-row">
+        <input type="number" id="inp-prime" class="n-input"
+          min="2" max="500" value="7"
+          oninput="onInputPrime(this.value)" onchange="onInputPrime(this.value)">
+      </div>
+      <div class="preset-grid" style="grid-template-columns:repeat(5,1fr)">
+        <button class="preset-btn" data-p="7"  onclick="setPrime(7)">7</button>
+        <button class="preset-btn" data-p="13" onclick="setPrime(13)">13</button>
+        <button class="preset-btn" data-p="19" onclick="setPrime(19)">19</button>
+        <button class="preset-btn" data-p="31" onclick="setPrime(31)">31</button>
+        <button class="preset-btn" data-p="37" onclick="setPrime(37)">37</button>
+      </div>
+      <div class="ctrl-row" style="margin-top:6px">
+        <span class="ctrl-label" data-i18n="ctrlLayers">Số tầng</span>
+        <span class="ctrl-val" id="lbl-layers">3</span>
+      </div>
+      <input type="range" id="sl-layers" min="2" max="8" value="3"
+             oninput="onSliderLayers(this.value)">
+      <div id="layer-info" class="info-box" style="font-size:10px;margin-top:4px;line-height:1.8"></div>
+    </div>
+
     <div class="btn-row">
       <button class="btn" id="btn-play" onclick="togglePlay()">▶ Play</button>
       <button class="btn" id="btn-reset" onclick="doReset()">↺ Reset</button>
@@ -514,8 +542,32 @@
 // ══════════════════════════════════════════════════════════════════
 const COLORS = { cyan: '#00e5ff', green: '#00e676', orange: '#ff9100', gold: '#ffd700', red: '#ff4444', purple: '#cc44ff' };
 const EPS = 1e-8;
-const INV_SQRT7 = 1 / Math.sqrt(7);
-const INV_7     = INV_SQRT7 * INV_SQRT7;   // = 1/7 (tỉ lệ tầng 3)
+
+// Palette for variable number of layers (up to 8)
+const LAYER_PALETTE = [
+  '#00e676', // green
+  '#ff9100', // orange
+  '#cc44ff', // purple
+  '#00e5ff', // cyan
+  '#ff6b9d', // pink
+  '#ffd700', // gold
+  '#4db6ac', // teal
+  '#ef5350', // red
+];
+
+// Scale label for layer j with prime P  (e.g. j=3,P=7 → "1/7√7")
+function getLayerScaleStr(j, P) {
+  if (j === 0) return '1';
+  const iPow   = Math.floor(j / 2);
+  const hasRoot = j % 2 === 1;
+  let denom;
+  if      (iPow === 0)               denom = `√${P}`;
+  else if (iPow === 1 && !hasRoot)   denom = `${P}`;
+  else if (iPow === 1 &&  hasRoot)   denom = `${P}√${P}`;
+  else if (!hasRoot)                 denom = `${P}^${iPow}`;
+  else                               denom = `${P}^${iPow}·√${P}`;
+  return `1/${denom}`;
+}
 
 // Points above this threshold use theory-only mode (no animation)
 const RENDER_THRESHOLD = 5000;
@@ -648,6 +700,8 @@ let state = {
   showUnitRef: true, // vòng tròn tham chiếu d=1
   selectedIdx: null, // điểm đang được chọn
   lang: 'vi',        // ngôn ngữ hiển thị: 'vi' | 'en'
+  prime: 7,          // số nguyên tố P cho OpenAI multi-layer
+  numLayers: 3,      // số tầng cho OpenAI multi-layer (2–8)
 };
 
 // Cache vị trí screen (canvas px) của mỗi điểm sau mỗi lần vẽ — dùng cho click detection
@@ -744,8 +798,15 @@ const LANG = {
     algLabel:     'Không gian đại số — kéo: pan · cuộn: zoom · (OpenAI) phải/Shift: pan, trái: xoay · dbl: reset',
     projLabel:    'Mặt phẳng 2D — cặp khoảng cách = 1 · kéo: di chuyển · cuộn: zoom · double-click: reset',
     chartLabel:   'Log-Log: n vs ν(n) và các đường lý thuyết',
-    layerNames:   ['Tầng 1: Z[ω]', 'Tầng 2: Z[ω]/√7', 'Tầng 3: Z[ω]/7'],
+    layerNameFn:  (j, P) => `Tầng ${j+1}: Z[ω]×${getLayerScaleStr(j, P)}`,
     selLabel:     n => `${n} điểm d=1`,
+    secOpenAICfg: 'Cấu hình OpenAI',
+    ctrlPrime:    'Số nguyên tố P',
+    ctrlLayers:   'Số tầng',
+    primeOK:      '≡1(mod 3) ✓',
+    primeWarn:    p => `≡${p%3}(mod 3) ⚠`,
+    primeErr:     'Không phải SNT ✗',
+    layerRowVI:   (j, P, nb) => `<span style="color:${LAYER_PALETTE[j%8]}">●</span> T${j+1} ×${getLayerScaleStr(j,P)}: <b>${nb}</b>`,
     toTitle:      'Chế độ lý thuyết',
     toSub1:       n => `N vượt ngưỡng render (${n}).`,
     toSub2:       'Giá trị tính theo công thức lý thuyết.',
@@ -788,8 +849,15 @@ const LANG = {
     algLabel:     'Algebraic space — drag: pan · scroll: zoom · (OpenAI) right/Shift: pan, left: rotate · dbl: reset',
     projLabel:    '2D plane — unit-distance pairs · drag: pan · scroll: zoom · dbl-click: reset',
     chartLabel:   'Log-Log: n vs ν(n) and theory curves',
-    layerNames:   ['Layer 1: Z[ω]', 'Layer 2: Z[ω]/√7', 'Layer 3: Z[ω]/7'],
+    layerNameFn:  (j, P) => `Layer ${j+1}: Z[ω]×${getLayerScaleStr(j, P)}`,
     selLabel:     n => `${n} pts d=1`,
+    secOpenAICfg: 'OpenAI Config',
+    ctrlPrime:    'Prime P',
+    ctrlLayers:   'Layers',
+    primeOK:      '≡1(mod 3) ✓',
+    primeWarn:    p => `≡${p%3}(mod 3) ⚠`,
+    primeErr:     'Not prime ✗',
+    layerRowVI:   (j, P, nb) => `<span style="color:${LAYER_PALETTE[j%8]}">●</span> L${j+1} ×${getLayerScaleStr(j,P)}: <b>${nb}</b>`,
     toTitle:      'Theory mode',
     toSub1:       n => `N exceeds render threshold (${n}).`,
     toSub2:       'Values computed from theoretical formulas.',
@@ -844,33 +912,34 @@ function generateEisenstein(maxN) {
 }
 
 function generateOpenAI(maxN) {
+  const P = state.prime;
+  const L = state.numLayers;
   const SQ3_2 = Math.sqrt(3) / 2;
-  const R = Math.ceil(Math.sqrt(maxN / 3)) + 4;
-  const c0 = [], c1 = [], c2 = [];
-  for (let a = -R; a <= R; a++)
-    for (let b = -R; b <= R; b++) {
-      const bx = a + b * 0.5, by = b * SQ3_2;
-      // Tầng 0: Z[ω] tỉ lệ 1
-      const x0 = bx, y0 = by;
-      c0.push({ x: x0, y: y0, a, b, layer: 0, d2: x0*x0+y0*y0 });
-      // Tầng 1: Z[ω] × 1/√7
-      const x1 = bx * INV_SQRT7, y1 = by * INV_SQRT7;
-      c1.push({ x: x1, y: y1, a, b, layer: 1, d2: x1*x1+y1*y1 });
-      // Tầng 2: Z[ω] × 1/7
-      const x2 = bx * INV_7, y2 = by * INV_7;
-      c2.push({ x: x2, y: y2, a, b, layer: 2, d2: x2*x2+y2*y2 });
-    }
-  c0.sort((u, v) => u.d2 - v.d2);
-  c1.sort((u, v) => u.d2 - v.d2);
-  c2.sort((u, v) => u.d2 - v.d2);
-  const n0 = Math.ceil(maxN / 3);
-  const n1 = Math.ceil((maxN - n0) / 2);
-  const n2 = maxN - n0 - n1;
-  const pts = [
-    ...c0.slice(0, n0),
-    ...c1.slice(0, n1),
-    ...c2.slice(0, n2),
-  ];
+  const R = Math.ceil(Math.sqrt(maxN / L)) + 4;
+
+  // Build sorted candidate list per layer
+  const layerCands = [];
+  for (let lyr = 0; lyr < L; lyr++) {
+    const scale = Math.pow(P, -lyr / 2); // 1, 1/√P, 1/P, 1/P√P, ...
+    const cands = [];
+    for (let a = -R; a <= R; a++)
+      for (let b = -R; b <= R; b++) {
+        const bx = a + b * 0.5, by = b * SQ3_2;
+        const x = bx * scale, y = by * scale;
+        cands.push({ x, y, a, b, layer: lyr, d2: x*x + y*y });
+      }
+    cands.sort((u, v) => u.d2 - v.d2);
+    layerCands.push(cands);
+  }
+
+  // Distribute evenly: floor(maxN/L) per layer, remainder to first layers
+  const nBase  = Math.floor(maxN / L);
+  const nExtra = maxN % L;
+  const pts = [];
+  for (let lyr = 0; lyr < L; lyr++) {
+    const n = nBase + (lyr < nExtra ? 1 : 0);
+    pts.push(...layerCands[lyr].slice(0, n));
+  }
   pts.sort((u, v) => u.d2 - v.d2);
   return pts.slice(0, maxN).map(({ x, y, a, b, layer }) => ({ x, y, a, b, layer }));
 }
@@ -1601,10 +1670,18 @@ function drawAlgOpenAI(canvas, points, pairs) {
   const ctx = canvas.getContext('2d');
   clearCanvas(ctx);
   const W = canvas.width, H = canvas.height;
-
   if (!points.length) return;
 
-  // Find max extent from layer 0 only (determines horizontal scale)
+  const P = state.prime;
+  const L = state.numLayers;
+
+  // Layer visual properties (dynamic for up to 8 layers)
+  const zLayer     = Array.from({length: L}, (_, i) => i * 3.0);
+  const layerColors = Array.from({length: L}, (_, i) => LAYER_PALETTE[i % LAYER_PALETTE.length]);
+  const gridBg     = ['#0d0d35','#1a120a','#150a1a','#0a1a1a','#1a0a15','#1a1a0a','#0a150a','#1a0a0a'];
+  const layerNames = Array.from({length: L}, (_, j) => LANG[state.lang].layerNameFn(j, P));
+
+  // Max extent of Layer 0 determines overall scale
   let maxR = 0;
   for (const p of points) {
     if (p.layer !== 0) continue;
@@ -1613,25 +1690,18 @@ function drawAlgOpenAI(canvas, points, pairs) {
   }
   maxR = Math.max(maxR, 1.5);
 
-  // 3 tầng với z-separation lớn để thấy rõ 3D
-  const zLayer   = [0, 3.0, 6.0];
-  const layerColors = [COLORS.green, COLORS.orange, COLORS.purple];
-  const layerNames  = LANG[state.lang].layerNames;
-  const gridColors  = ['#0d0d35', '#1a120a', '#150a1a'];
-
-  // Centered canvas + pan offset; base scale without zoom (zoom applied in project3d)
   const cx = W / 2 + view3d.panX, cy = H / 2 + view3d.panY;
-  const baseScale = Math.min(W, H) / (maxR * 5.5 + 1);
+  const baseScale = Math.min(W, H) / (maxR * (3 + L * 0.8) + 1);
 
   const toIso = (wx, wy, lyr) =>
     project3d(wx * baseScale, wy * baseScale, zLayer[lyr] * baseScale, cx, cy);
 
   const RR = Math.max(Math.ceil(maxR) + 1, 2);
 
-  // Vẽ lưới nền mỗi tầng (từ dưới lên để z-order đúng)
+  // Grid background per layer (bottom to top for z-order)
   ctx.lineWidth = 0.5;
-  for (let zz = 0; zz <= 2; zz++) {
-    ctx.strokeStyle = gridColors[zz];
+  for (let zz = 0; zz < L; zz++) {
+    ctx.strokeStyle = gridBg[zz % gridBg.length];
     for (let a = -RR; a <= RR; a++) {
       const [x1, y1] = toIso(a, -RR, zz);
       const [x2, y2] = toIso(a,  RR, zz);
@@ -1644,16 +1714,16 @@ function drawAlgOpenAI(canvas, points, pairs) {
     }
   }
 
-  // Đường dọc nối giữa các tầng (pillars) ở 4 góc — gợi ý 3D
+  // Vertical pillars at 4 corners to suggest depth
   ctx.strokeStyle = '#ffffff11';
   ctx.lineWidth = 0.6;
   for (const [a, b] of [[RR,-RR],[-RR,RR],[RR,RR],[-RR,-RR]]) {
     const [x0, y0] = toIso(a, b, 0);
-    const [x2, y2] = toIso(a, b, 2);
-    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x2, y2); ctx.stroke();
+    const [xN, yN] = toIso(a, b, L - 1);
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(xN, yN); ctx.stroke();
   }
 
-  // Cặp xuyên tầng — đường vàng sáng
+  // Cross-layer pairs — bright gold
   ctx.lineWidth = 1.2;
   for (const pr of pairs) {
     const pi = points[pr.i], pj = points[pr.j];
@@ -1664,7 +1734,7 @@ function drawAlgOpenAI(canvas, points, pairs) {
     ctx.beginPath(); ctx.moveTo(ix1, iy1); ctx.lineTo(ix2, iy2); ctx.stroke();
   }
 
-  // Cặp nội tầng — mờ
+  // Within-layer pairs — dim
   ctx.lineWidth = 0.5;
   for (const pr of pairs) {
     const pi = points[pr.i], pj = points[pr.j];
@@ -1675,14 +1745,15 @@ function drawAlgOpenAI(canvas, points, pairs) {
     ctx.beginPath(); ctx.moveTo(ix1, iy1); ctx.lineTo(ix2, iy2); ctx.stroke();
   }
 
-  // Điểm — vẽ từ tầng 0 lên tầng 2 (z-order đúng)
-  // Lưu screen coords trước (toIso trả về canvas coords trực tiếp cho OpenAI)
+  // Store screen coords for click detection
   _lastAlgPos.length = points.length;
   for (let idx = 0; idx < points.length; idx++) {
     const p = points[idx];
     _lastAlgPos[idx] = toIso(p.x, p.y, p.layer);
   }
-  for (let layer = 0; layer <= 2; layer++) {
+
+  // Draw points layer by layer (bottom to top for z-order)
+  for (let layer = 0; layer < L; layer++) {
     const lc = layerColors[layer];
     for (let idx = 0; idx < points.length; idx++) {
       if (points[idx].layer !== layer) continue;
@@ -1704,10 +1775,10 @@ function drawAlgOpenAI(canvas, points, pairs) {
     }
   }
 
-  // Nhãn tầng ở góc phải mỗi mặt phẳng
+  // Layer labels at right edge of each plane
   ctx.font = 'bold 11px monospace';
   ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
-  for (let zz = 0; zz <= 2; zz++) {
+  for (let zz = 0; zz < L; zz++) {
     ctx.fillStyle = layerColors[zz] + 'dd';
     const [lx, ly] = toIso(RR, -RR, zz);
     ctx.fillText(layerNames[zz], lx - 4, ly);
@@ -1813,6 +1884,9 @@ function selectMethod(m) {
   state.method = m;
   updateMethodCards(m);
   updateInfoBox(m);
+  // Show OpenAI config panel only for method 2
+  const cfg = document.getElementById('openai-cfg');
+  if (cfg) cfg.style.display = m === 2 ? '' : 'none';
   doReset();
 }
 
@@ -2079,6 +2153,81 @@ function initInteractions() {
 }
 
 // ══════════════════════════════════════════════════════════════════
+//  OPENAI CONFIG CONTROLS
+// ══════════════════════════════════════════════════════════════════
+function isPrime(n) {
+  if (n < 2) return false;
+  if (n === 2) return true;
+  if (n % 2 === 0) return false;
+  for (let i = 3; i <= Math.sqrt(n); i += 2) if (n % i === 0) return false;
+  return true;
+}
+
+function updatePrimeStatus(p) {
+  const el = document.getElementById('prime-status');
+  if (!el) return;
+  const L = LANG[state.lang];
+  if (!isPrime(p)) {
+    el.textContent = L.primeErr;
+    el.style.color = 'var(--red)';
+  } else if (p % 3 !== 1) {
+    el.textContent = L.primeWarn(p);
+    el.style.color = 'var(--orange)';
+  } else {
+    el.textContent = L.primeOK;
+    el.style.color = 'var(--green)';
+  }
+}
+
+function updateLayerInfo() {
+  const el = document.getElementById('layer-info');
+  if (!el) return;
+  const P = state.prime;
+  const L = state.numLayers;
+  const lang = state.lang;
+  let html = '';
+  for (let j = 0; j < L; j++) {
+    // Within-layer neighbors: 6; cross-layer (j>0 vs Layer 0): 6(j+1)
+    const nb = j === 0
+      ? (lang === 'vi' ? '6 hàng xóm nội tầng' : '6 within-layer neighbors')
+      : `${6*(j+1)} ${lang === 'vi' ? 'hàng xóm → T1' : 'neighbors → L1'}`;
+    html += LANG[lang].layerRowVI(j, P, nb) + '<br>';
+  }
+  el.innerHTML = html;
+}
+
+function onInputPrime(val) {
+  const p = Math.max(2, Math.min(500, Math.round(+val)));
+  if (!isFinite(p)) return;
+  state.prime = p;
+  document.getElementById('inp-prime').value = p;
+  document.querySelectorAll('#openai-cfg .preset-btn').forEach(btn => {
+    btn.classList.toggle('active-preset', +btn.dataset.p === p);
+  });
+  updatePrimeStatus(p);
+  updateLayerInfo();
+  doReset();
+}
+
+function setPrime(p) {
+  state.prime = p;
+  document.getElementById('inp-prime').value = p;
+  document.querySelectorAll('#openai-cfg .preset-btn').forEach(btn => {
+    btn.classList.toggle('active-preset', +btn.dataset.p === p);
+  });
+  updatePrimeStatus(p);
+  updateLayerInfo();
+  doReset();
+}
+
+function onSliderLayers(val) {
+  state.numLayers = +val;
+  document.getElementById('lbl-layers').textContent = val;
+  updateLayerInfo();
+  doReset();
+}
+
+// ══════════════════════════════════════════════════════════════════
 //  LANGUAGE SWITCH
 // ══════════════════════════════════════════════════════════════════
 function applyLang(lang) {
@@ -2115,6 +2264,9 @@ function applyLang(lang) {
   }
   // Re-render info box and header desc for current method
   updateInfoBox(state.method);
+  // Refresh OpenAI config panel texts
+  updatePrimeStatus(state.prime);
+  updateLayerInfo();
   // Re-render canvas (for layer names, selection label, etc.)
   drawFrame();
 }
@@ -2138,8 +2290,12 @@ window.addEventListener('DOMContentLoaded', () => {
   document.querySelectorAll('.preset-btn').forEach(btn => {
     btn.classList.toggle('active-preset', +btn.dataset.n === state.maxN);
   });
-  // Apply default language (Vietnamese)
+  // Apply default language (Vietnamese) — also refreshes OpenAI panel
   applyLang(state.lang);
+  // Init OpenAI preset button active state
+  document.querySelectorAll('#openai-cfg .preset-btn').forEach(btn => {
+    btn.classList.toggle('active-preset', +btn.dataset.p === state.prime);
+  });
 
   window.addEventListener('resize', doLayout);
 });

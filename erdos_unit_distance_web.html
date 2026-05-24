@@ -1109,12 +1109,9 @@ function generateAllPoints(method, maxN) {
 //  No randomness; deterministic and fully reproducible.
 // ══════════════════════════════════════════════════════════════════
 function generateQFractal(maxN) {
-  // K_MIN: minimum children for nodes near origin (hex = 6 is the natural
-  // minimum for unit-distance graphs — equilateral triangle packing).
-  // K_MAX: hard cap to keep generation fast for large n.
-  const K_MIN  = 6;
-  const K_HARD = 60;
-  const N_CAND  = 72; // base evenly-spaced evaluation grid (5° resolution)
+  const K_HARD  = 60;   // absolute ceiling on children per node
+  const D_MIN2  = 0.64; // (0.8)² — min squared-distance between any two points
+  const N_CAND  = 72;   // base evenly-spaced evaluation grid (5° resolution)
   const PREC   = 1e4;         // position dedup precision
   const TWO_PI = 2 * Math.PI;
 
@@ -1223,24 +1220,22 @@ function generateQFractal(maxN) {
     const { x, y, layer } = pts[qi];
     const nearby = lhNearby(x, y);
 
-    // ── Adaptive K: children per node to fill the next ring ──────
-    // Ring r has ≈ round(2πr) nodes; ring r+1 needs ≈ round(2π(r+1)).
-    // Each node must contribute ≈ round(2π(r+1)) / round(2πr) new
-    // children on average.  For robustness (collisions, gaps) we
-    // multiply by an overlap factor of 3 and clamp to [K_MIN, K_HARD].
-    //
-    //   K_eff = clamp( ceil(2π(r+1) / max(1, round(2πr))) × 3,
-    //                  K_MIN, K_HARD )
-    //
-    // Inner nodes (r<1): ring is tiny → at least K_MIN=6 children.
-    // Outer nodes (r≥1): converges to ≈3 children per node (×overlap).
-    const r       = Math.sqrt(x * x + y * y);
-    const ringR   = Math.max(1, Math.round(TWO_PI * r));
-    const ringR1  = Math.round(TWO_PI * (r + 1));
-    const K_eff   = Math.min(K_HARD,
-                    Math.max(K_MIN, Math.ceil(ringR1 / ringR * 3)));
-    const minSep  = TWO_PI / K_eff;
-    const nCand   = Math.max(N_CAND, K_eff * 4);
+    // ── Adaptive K: uniform spawning ratio ~2.7× at every radius ──
+    // Root (r<0.5): hardcoded K=6 (hex base).
+    //   Old bug: formula gave K=18 for root → 3× dense inner ring.
+    // Other nodes: K_eff = ceil(ring(r+1)/ring(r) × 2.5), min 2.
+    //   ratio ring(r+1)/ring(r) → 1 as r→∞, so K_eff → 3 (overlap buffer).
+    //   Removes the K_MIN=6 floor that caused 4–5× over-sampling at r≥2.
+    // D_MIN2 check below absorbs the ~2.7× excess by rejecting candidates
+    // placed too close to existing points, giving uniform final density.
+    const r      = Math.sqrt(x * x + y * y);
+    const ringR  = Math.max(1, Math.round(TWO_PI * r));
+    const ringR1 = Math.round(TWO_PI * (r + 1));
+    const K_eff  = r < 0.5
+                 ? 6
+                 : Math.min(K_HARD, Math.max(2, Math.ceil(ringR1 / ringR * 2.5)));
+    const minSep = TWO_PI / K_eff;
+    const nCand  = Math.max(N_CAND, K_eff * 4);
 
     // ── 1. Build candidate pool ─────────────────────────────────
     // (a) Evenly-spaced grid across full circle — no randomness
@@ -1262,13 +1257,17 @@ function generateQFractal(maxN) {
     for (const θ of cands) {
       const cx = x + Math.cos(θ), cy = y + Math.sin(θ);
       if (posMap.has(posKey(cx, cy))) continue;
-      let pairs = 0, minD2 = Infinity;
+      let pairs = 0, minD2 = Infinity, tooClose = false;
       for (const ni of nearby) {
         const q = pts[ni];
         const ddx = cx - q.x, ddy = cy - q.y, d2 = ddx * ddx + ddy * ddy;
         if (Math.abs(d2 - 1.0) < EPS) pairs++;
-        if (ni !== qi && d2 < minD2) minD2 = d2;
+        if (ni !== qi) {
+          if (d2 < D_MIN2) { tooClose = true; break; } // too close — skip
+          if (d2 < minD2) minD2 = d2;
+        }
       }
+      if (tooClose) continue;
       scored.push({ θ, pairs, minD2: minD2 === Infinity ? 0 : minD2 });
     }
     scored.sort((a, b) => b.pairs - a.pairs || b.minD2 - a.minD2);

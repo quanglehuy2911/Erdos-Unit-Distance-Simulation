@@ -1212,21 +1212,40 @@ function generateQFractal(maxN, rmax) {
     return [alpha + beta, alpha - beta];
   }
 
-  // ── Candidate heap: min-heap keyed by dist² from origin ────────
-  // Stores POSITIONS (not point indices). Each entry {cx,cy,d2}.
-  const heap     = [];
-  const heapKeys = new Set(); // posKey → avoid duplicate heap entries
+  // Count how many placed points are at unit distance from (cx, cy)
+  function countPairs(cx, cy) {
+    const nb = lhNearby(cx, cy);
+    let count = 0;
+    for (const ni of nb) {
+      const q = pts[ni];
+      const ddx = cx - q.x, ddy = cy - q.y;
+      if (Math.abs(ddx * ddx + ddy * ddy - 1.0) < EPS) count++;
+    }
+    return count;
+  }
 
-  function hPush(cx, cy) {
+  // ── Candidate heap: min-heap keyed by composite score ────────────
+  // Key = d2 − pe * 1e9 :  positions with more unit-distance connections
+  // (pe) come first; ties broken by proximity to origin (d2).
+  // Stores POSITIONS (not point indices). Each entry {cx, cy, key}.
+  const heap     = [];
+  const heapKeys = new Map(); // posKey → best pe seen so far
+
+  function hPush(cx, cy, pe) {
     if (cx * cx + cy * cy > RMAX2 + 1e-9) return;  // outside bounding disk
     const k = posKey(cx, cy);
-    if (posMap.has(k) || heapKeys.has(k)) return;
-    heapKeys.add(k);
-    heap.push({ cx, cy, d2: cx * cx + cy * cy });
+    if (posMap.has(k)) return;
+    const d2  = cx * cx + cy * cy;
+    const key = d2 - (pe || 0) * 1e9;
+    // If already queued with a better (lower) key, skip
+    const existing = heapKeys.get(k);
+    if (existing !== undefined && existing <= key) return;
+    heapKeys.set(k, key);
+    heap.push({ cx, cy, key });
     let i = heap.length - 1;
     while (i > 0) {
       const p = (i - 1) >> 1;
-      if (heap[p].d2 <= heap[i].d2) break;
+      if (heap[p].key <= heap[i].key) break;
       const t = heap[p]; heap[p] = heap[i]; heap[i] = t; i = p;
     }
   }
@@ -1238,8 +1257,8 @@ function generateQFractal(maxN, rmax) {
     for (;;) {
       const l = 2 * i + 1, r = 2 * i + 2;
       let s = i;
-      if (l < heap.length && heap[l].d2 < heap[s].d2) s = l;
-      if (r < heap.length && heap[r].d2 < heap[s].d2) s = r;
+      if (l < heap.length && heap[l].key < heap[s].key) s = l;
+      if (r < heap.length && heap[r].key < heap[s].key) s = r;
       if (s === i) break;
       const t = heap[i]; heap[i] = heap[s]; heap[s] = t; i = s;
     }
@@ -1247,18 +1266,24 @@ function generateQFractal(maxN, rmax) {
   }
 
   // Enqueue all unit-circle positions around point (px, py):
-  //   (a) N_CAND evenly-spaced grid positions
+  //   (a) N_CAND evenly-spaced grid positions — pushed with current pairs estimate
   //   (b) Cross-angle positions (analytically exact, at dist 1 from
-  //       both px,py AND an existing neighbour)
+  //       both px,py AND an existing neighbour) — at least 2 pairs by construction
   function enqueue(px, py) {
-    for (let i = 0; i < N_CAND; i++)
-      hPush(px + Math.cos(TWO_PI * i / N_CAND),
-            py + Math.sin(TWO_PI * i / N_CAND));
+    for (let i = 0; i < N_CAND; i++) {
+      const cx = px + Math.cos(TWO_PI * i / N_CAND);
+      const cy = py + Math.sin(TWO_PI * i / N_CAND);
+      hPush(cx, cy, countPairs(cx, cy));
+    }
     const nb = lhNearby(px, py);
     for (const ni of nb) {
       const q = pts[ni];
-      for (const θ of crossAngles(px, py, q.x, q.y))
-        hPush(px + Math.cos(θ), py + Math.sin(θ));
+      for (const θ of crossAngles(px, py, q.x, q.y)) {
+        const cx = px + Math.cos(θ);
+        const cy = py + Math.sin(θ);
+        // analytically at unit distance from both (px,py) and q → pe ≥ 2
+        hPush(cx, cy, countPairs(cx, cy));
+      }
     }
   }
 
@@ -1267,10 +1292,11 @@ function generateQFractal(maxN, rmax) {
   enqueue(0, 0);
 
   while (pts.length < maxN && heap.length > 0) {
-    const { cx, cy } = hPop();
+    const { cx, cy, key } = hPop();
     const k = posKey(cx, cy);
+    if (posMap.has(k)) continue;              // already placed
+    if (heapKeys.get(k) !== key) continue;    // superseded by a better-scored entry
     heapKeys.delete(k);
-    if (posMap.has(k)) continue;   // stale entry — position taken
 
     // Check: (a) not too close to any existing point, (b) ≥1 unit-distance neighbour
     const nb = lhNearby(cx, cy);

@@ -1186,6 +1186,19 @@ function generateQFractal(maxN) {
     return [alpha + beta, alpha - beta];
   }
 
+  // Count how many points in nearbyList are at unit distance from (cx,cy).
+  // Uses a slightly relaxed EPS to absorb floating-point error from crossAngles.
+  const SCORE_EPS = 1e-6;
+  function countPairs(cx, cy, nearbyList) {
+    let count = 0;
+    for (const ni of nearbyList) {
+      const q = pts[ni];
+      const ddx = cx - q.x, ddy = cy - q.y;
+      if (Math.abs(ddx * ddx + ddy * ddy - 1.0) < SCORE_EPS) count++;
+    }
+    return count;
+  }
+
   // ── BFS ──
   addPt(0, 0, 0, -1);
   let qi = 0;
@@ -1200,28 +1213,36 @@ function generateQFractal(maxN) {
       const sMin = j * SECTOR;
       const sMax = (j + 1) * SECTOR;  // last sector: sMax = 2π (< is always ok)
 
-      // Search for a cross-branch alignment angle in this sector
-      let chosenAngle = null;
-      outer:
+      // ── Step 1: collect ALL cross-angle candidates in this sector ──
+      const candidates = [];
       for (const ni of nearby) {
-        if (ni === qi) continue;       // skip self (d=0 → crossAngles returns [])
+        if (ni === qi) continue;
         const q = pts[ni];
         for (const θ of crossAngles(x, y, q.x, q.y)) {
           const nt = normAngle(θ);
-          if (nt >= sMin && nt < sMax) {
-            chosenAngle = θ;
-            break outer;
-          }
+          if (nt >= sMin && nt < sMax) candidates.push(θ);
         }
       }
 
-      // Fallback: random angle within sector
-      if (chosenAngle === null) {
-        chosenAngle = sMin + Math.random() * SECTOR;
+      // ── Step 2: score each candidate — pick the one that creates the most pairs ──
+      let bestAngle = null;
+      let bestScore = -1;
+
+      for (const θ of candidates) {
+        const cx = x + Math.cos(θ);
+        const cy = y + Math.sin(θ);
+        if (posMap.has(posKey(cx, cy))) continue;   // skip collisions
+        const score = countPairs(cx, cy, nearby);   // counts parent pair too
+        if (score > bestScore) { bestScore = score; bestAngle = θ; }
       }
 
-      addPt(x + Math.cos(chosenAngle),
-            y + Math.sin(chosenAngle),
+      // ── Step 3: fallback — random angle within sector ──
+      if (bestAngle === null) {
+        bestAngle = sMin + Math.random() * SECTOR;
+      }
+
+      addPt(x + Math.cos(bestAngle),
+            y + Math.sin(bestAngle),
             layer + 1, qi);
     }
     qi++;

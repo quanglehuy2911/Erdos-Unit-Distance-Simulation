@@ -1270,9 +1270,9 @@ function generateQFractal(maxN) {
         if (score > bestScore) { bestScore = score; bestAngle = θ; }
       }
 
-      // ── Step 3: fallback — centre of sector (deterministic, evenly spaced) ──
+      // ── Step 3: fallback — random angle within sector ──
       if (bestAngle === null) {
-        bestAngle = sMin + SECTOR * 0.5;
+        bestAngle = sMin + Math.random() * SECTOR;
       }
 
       const childIdx = addPt(x + Math.cos(bestAngle),

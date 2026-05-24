@@ -1515,8 +1515,23 @@ function drawProjection(canvas, points, pairs, flashes, method) {
   }
 
   // ── Draw points ───────────────────────────────────────────────────
+  // For method 2: layer-2 has coincident points with layer-0 at the same
+  // physical positions (P×integer multiples map to the same coords at 1/P scale).
+  // Draw from highest layer → layer 0 last, so T1 (green) wins on top.
+  // For methods 0/1: draw in natural index order.
   _lastProjPos.length = points.length;
-  for (let idx = 0; idx < points.length; idx++) {
+  let drawOrder;
+  if (method === 2) {
+    const L = state.numLayers;
+    const byLayer = Array.from({length: L}, () => []);
+    for (let i = 0; i < points.length; i++) byLayer[points[i].layer].push(i);
+    drawOrder = [];
+    for (let lyr = L - 1; lyr >= 0; lyr--) drawOrder.push(...byLayer[lyr]);
+  } else {
+    drawOrder = Array.from({length: points.length}, (_, i) => i);
+  }
+
+  for (const idx of drawOrder) {
     const p = points[idx];
     const [cx, cy] = proj(p.x, p.y);
     // Lưu screen-canvas px coords cho click detection

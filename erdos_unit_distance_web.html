@@ -1452,16 +1452,38 @@ function drawProjection(canvas, points, pairs, flashes, method) {
   // Kích thước cố định trên màn hình (không phụ thuộc zoom)
   const iz2 = view2d.zoom;
 
-  // Draw normal pairs
-  ctx.lineWidth = 0.8 / iz2;
-  for (const pair of pairs) {
-    const [x1, y1] = proj(points[pair.i].x, points[pair.i].y);
-    const [x2, y2] = proj(points[pair.j].x, points[pair.j].y);
-    ctx.strokeStyle = color + '44';
-    ctx.beginPath();
-    ctx.moveTo(x1, y1);
-    ctx.lineTo(x2, y2);
-    ctx.stroke();
+  // ── Draw pairs ───────────────────────────────────────────────────
+  // method 2 (OpenAI): within-layer dim → cross-layer gold (mirrors drawAlgOpenAI)
+  // other methods: uniform method-colour at low opacity
+  if (method === 2) {
+    // Within-layer pairs first (behind cross-layer)
+    ctx.lineWidth = 0.6 / iz2;
+    for (const pair of pairs) {
+      const pi = points[pair.i], pj = points[pair.j];
+      if (pi.layer !== pj.layer) continue;
+      const [x1, y1] = proj(pi.x, pi.y);
+      const [x2, y2] = proj(pj.x, pj.y);
+      ctx.strokeStyle = LAYER_PALETTE[pi.layer % LAYER_PALETTE.length] + '33';
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    }
+    // Cross-layer pairs on top (gold)
+    ctx.lineWidth = 1.0 / iz2;
+    for (const pair of pairs) {
+      const pi = points[pair.i], pj = points[pair.j];
+      if (pi.layer === pj.layer) continue;
+      const [x1, y1] = proj(pi.x, pi.y);
+      const [x2, y2] = proj(pj.x, pj.y);
+      ctx.strokeStyle = COLORS.gold + '66';
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    }
+  } else {
+    ctx.lineWidth = 0.8 / iz2;
+    for (const pair of pairs) {
+      const [x1, y1] = proj(points[pair.i].x, points[pair.i].y);
+      const [x2, y2] = proj(points[pair.j].x, points[pair.j].y);
+      ctx.strokeStyle = color + '44';
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    }
   }
 
   // Draw flash pairs (new pairs, 600ms gold highlight)
@@ -1479,7 +1501,20 @@ function drawProjection(canvas, points, pairs, flashes, method) {
     ctx.stroke();
   }
 
-  // Draw points
+  // ── Per-layer maxConn for method 2 (avoids dimming layers with few pairs) ──
+  // For methods 0/1, use global maxConn. For method 2, normalise per layer so
+  // that layer 0 (few pairs) isn't unfairly dimmed relative to layer 2 (many).
+  let layerMaxConn;
+  if (method === 2) {
+    const L = state.numLayers;
+    layerMaxConn = new Array(L).fill(1);
+    for (let i = 0; i < points.length; i++) {
+      const lyr = points[i].layer;
+      if (connCount[i] > layerMaxConn[lyr]) layerMaxConn[lyr] = connCount[i];
+    }
+  }
+
+  // ── Draw points ───────────────────────────────────────────────────
   _lastProjPos.length = points.length;
   for (let idx = 0; idx < points.length; idx++) {
     const p = points[idx];
@@ -1490,10 +1525,14 @@ function drawProjection(canvas, points, pairs, flashes, method) {
       (cy - H2/2) * view2d.zoom + H2/2 + view2d.panY,
     ];
     const isNewest = idx === points.length - 1;
-    const brightness = 0.35 + 0.65 * (connCount[idx] / maxConn);
 
+    // method 2: brightness normalised per-layer; others: global
+    const mc = method === 2 ? layerMaxConn[p.layer] : maxConn;
+    const brightness = 0.45 + 0.55 * (connCount[idx] / mc);
+
+    // method 2: use LAYER_PALETTE for all layers (consistent with drawAlgOpenAI)
     let dotColor = color;
-    if (method === 2) dotColor = [COLORS.green, COLORS.orange, COLORS.purple][p.layer] ?? COLORS.purple;
+    if (method === 2) dotColor = LAYER_PALETTE[p.layer % LAYER_PALETTE.length];
 
     // Bán kính cố định trên màn hình (chia zoom để bù lại ctx.scale)
     const r = (isNewest ? 5 : 3) / iz2;
@@ -1509,9 +1548,9 @@ function drawProjection(canvas, points, pairs, flashes, method) {
       ctx.fill();
     }
 
-    // Inner glow
-    const alpha = Math.round(brightness * 255).toString(16).padStart(2, '0');
-    ctx.fillStyle = dotColor + alpha;
+    // Inner glow (hex alpha appended to 6-char hex → #RRGGBBAA)
+    const glowAlpha = Math.round(brightness * 255).toString(16).padStart(2, '0');
+    ctx.fillStyle = dotColor + glowAlpha;
     ctx.beginPath();
     ctx.arc(cx, cy, r + 2 / iz2, 0, Math.PI * 2);
     ctx.fill();

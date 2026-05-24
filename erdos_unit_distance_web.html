@@ -1084,6 +1084,19 @@ function gridTheory(n) {
 function openAITheory(n) { return Math.pow(n, 1.014); }
 function stBound(n) { return Math.pow(n, 4 / 3); }
 
+// ── OpenAI multi-layer: minimum n required for L layers to form within-layer unit pairs ──
+// Each layer-j needs a lattice radius R ≥ P^{j/2}, which requires n ≥ P^L × 2π / (√3×(P-1))
+function minNForLayers(L, P) {
+  return Math.pow(P, L) * 2 * Math.PI / (Math.sqrt(3) * (P - 1));
+}
+// Maximum number of "useful" layers for given n and P (beyond this, V(n) → 0)
+function maxUsefulLayers(n, P) {
+  if (P <= 1 || n <= 0) return 1;
+  const arg = n * (P - 1) * Math.sqrt(3) / (2 * Math.PI);
+  if (arg <= 1) return 1;
+  return Math.max(1, Math.floor(Math.log(arg) / Math.log(P)));
+}
+
 // ── α lý thuyết tiệm cận (n→∞) — dùng cho section "Lý thuyết" trong stats ──
 // Lưới Vuông:    ν(n) = 2n − 2√n  →  α → 1  khi n→∞  →  A_theory = ν/n → 2
 // CM Eisenstein: ν(n) = 3n − B√n  →  α → 1  khi n→∞  →  A_theory = ν/n → 3
@@ -2107,6 +2120,7 @@ function onInputN(val) {
   document.querySelectorAll('.preset-btn').forEach(btn => {
     btn.classList.toggle('active-preset', +btn.dataset.n === n);
   });
+  updateLayerInfo();
   doReset();
 }
 
@@ -2116,6 +2130,7 @@ function setPresetN(n) {
   document.querySelectorAll('.preset-btn').forEach(btn => {
     btn.classList.toggle('active-preset', +btn.dataset.n === n);
   });
+  updateLayerInfo();
   doReset();
 }
 
@@ -2392,7 +2407,9 @@ function updateLayerInfo() {
   if (!el) return;
   const P = state.prime;
   const L = state.numLayers;
+  const n = state.maxN;
   const lang = state.lang;
+  const maxL = maxUsefulLayers(n, P);
   // Compute proportional weights (n_j ∝ P^j) for display
   const weights = Array.from({length: L}, (_, j) => Math.pow(P, j));
   const totalW  = weights.reduce((s, w) => s + w, 0);
@@ -2404,7 +2421,32 @@ function updateLayerInfo() {
       : `${6*(j+1)} ${lang === 'vi' ? 'hàng xóm → T1' : 'neighbors → L1'}`;
     const pct = (100 * weights[j] / totalW).toFixed(1);
     html += LANG[lang].layerRowVI(j, P, nb)
-          + ` · <span style="color:var(--muted)">~${pct}%</span><br>`;
+          + ` · <span style="color:var(--muted)">~${pct}%</span>`;
+    // Warn if this layer cannot form within-layer unit pairs with current n
+    if (j >= maxL) {
+      const needN = Math.ceil(minNForLayers(j + 1, P));
+      const needStr = needN >= 1e9 ? (needN / 1e9).toFixed(1) + 'B'
+                    : needN >= 1e6 ? (needN / 1e6).toFixed(1) + 'M'
+                    : needN >= 1e3 ? Math.ceil(needN / 100) * 100
+                    : needN;
+      html += ` <span style="color:var(--orange)" title="${lang === 'vi' ? 'Tầng này cần thêm điểm để tạo cặp khoảng cách = 1' : 'This layer needs more points for unit-distance pairs'}">⚠ n≥${needStr}</span>`;
+    }
+    html += '<br>';
+  }
+  // Summary warning if any layer is insufficient
+  if (L > maxL) {
+    const layerWord  = lang === 'vi' ? 'tầng' : 'layer';
+    const namesStr   = Array.from({length: L - maxL}, (_, k) =>
+      (lang === 'vi' ? 'T' : 'L') + (maxL + k + 1)).join(', ');
+    const needN = Math.ceil(minNForLayers(L, P));
+    const needStr = needN >= 1e9 ? (needN / 1e9).toFixed(1) + 'B'
+                  : needN >= 1e6 ? (needN / 1e6).toFixed(1) + 'M'
+                  : needN >= 1e3 ? Math.ceil(needN / 100) * 100
+                  : needN;
+    const warnMsg = lang === 'vi'
+      ? `⚠ ${namesStr} chưa đủ điểm (cần n≥${needStr}) → V(n)≈0`
+      : `⚠ ${namesStr} lack points (need n≥${needStr}) → V(n)≈0`;
+    html += `<span style="color:var(--orange);font-style:italic">${warnMsg}</span>`;
   }
   el.innerHTML = html;
 }

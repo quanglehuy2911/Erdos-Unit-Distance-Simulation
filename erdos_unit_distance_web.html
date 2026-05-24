@@ -324,6 +324,7 @@
     padding: 8px;
     gap: 8px;
     min-width: 0;
+    position: relative;   /* anchor for expanded canvas */
   }
 
   #canvas-row {
@@ -381,6 +382,34 @@
     color: var(--muted);
     text-transform: uppercase;
     pointer-events: none;
+  }
+
+  /* ── Expand / collapse button on each canvas panel ── */
+  .expand-btn {
+    position: absolute;
+    top: 6px; right: 7px;
+    z-index: 20;
+    background: rgba(10,14,26,0.72);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 4px 6px;
+    line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    transition: color .15s, border-color .15s, background .15s;
+  }
+  .expand-btn:hover {
+    color: var(--fg);
+    border-color: #5060a0;
+    background: rgba(30,40,80,0.9);
+  }
+  /* Expanded panel covers all of #content */
+  .panel-expanded {
+    position: absolute !important;
+    inset: 0 !important;
+    z-index: 15 !important;
+    border-radius: var(--radius) !important;
   }
 
   /* ── Large-N warning popup ── */
@@ -605,15 +634,24 @@
     <div id="canvas-row">
       <div class="canvas-wrap" id="alg-wrap">
         <div class="canvas-label" data-i18n="algLabel">Không gian đại số — kéo: pan · cuộn: zoom · (OpenAI) phải/Shift: pan, trái: xoay · dbl: reset</div>
+        <button class="expand-btn" id="expand-alg" onclick="toggleExpand('alg')" title="Mở rộng">
+          <svg id="expand-alg-icon" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4.5V1H4.5M8.5 1H12V4.5M12 8.5V12H8.5M4.5 12H1V8.5"/></svg>
+        </button>
         <canvas id="canvas-alg"></canvas>
       </div>
       <div class="canvas-wrap" id="proj-wrap">
         <div class="canvas-label" data-i18n="projLabel">Mặt phẳng 2D — cặp khoảng cách = 1 · kéo: di chuyển · cuộn: zoom · double-click: reset</div>
+        <button class="expand-btn" id="expand-proj" onclick="toggleExpand('proj')" title="Mở rộng">
+          <svg id="expand-proj-icon" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4.5V1H4.5M8.5 1H12V4.5M12 8.5V12H8.5M4.5 12H1V8.5"/></svg>
+        </button>
         <canvas id="canvas-proj"></canvas>
       </div>
     </div>
     <div id="chart-wrap">
       <div class="chart-label" data-i18n="chartLabel">Log-Log: n vs ν(n) và các đường lý thuyết</div>
+      <button class="expand-btn" id="expand-chart" onclick="toggleExpand('chart')" title="Mở rộng">
+        <svg id="expand-chart-icon" width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4.5V1H4.5M8.5 1H12V4.5M12 8.5V12H8.5M4.5 12H1V8.5"/></svg>
+      </button>
       <canvas id="chart-canvas"></canvas>
     </div>
   </div>
@@ -2637,6 +2675,52 @@ window.addEventListener('DOMContentLoaded', () => {
 
   window.addEventListener('resize', doLayout);
 });
+
+// ══════════════════════════════════════════════════════════════════
+//  CANVAS EXPAND / COLLAPSE
+// ══════════════════════════════════════════════════════════════════
+let expandedPanel = null;   // 'alg' | 'proj' | 'chart' | null
+
+const SVG_EXPAND   = `<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4.5V1H4.5M8.5 1H12V4.5M12 8.5V12H8.5M4.5 12H1V8.5"/></svg>`;
+const SVG_COLLAPSE = `<svg width="13" height="13" viewBox="0 0 13 13" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 1V4.5H1M12 4.5H8.5V1M8.5 12V8.5H12M1 8.5H4.5V12"/></svg>`;
+
+function toggleExpand(id) {
+  const wrapId  = id === 'chart' ? 'chart-wrap' : id + '-wrap';
+  const wrap    = document.getElementById(wrapId);
+  const btn     = document.getElementById('expand-' + id);
+  const isOpen  = expandedPanel === id;
+
+  // Collapse whatever is currently expanded
+  if (expandedPanel) {
+    const prevId   = expandedPanel;
+    const prevWrap = document.getElementById(prevId === 'chart' ? 'chart-wrap' : prevId + '-wrap');
+    prevWrap.classList.remove('panel-expanded');
+    document.getElementById('expand-' + prevId).innerHTML = SVG_EXPAND;
+    document.getElementById('expand-' + prevId).title =
+      state.lang === 'vi' ? 'Mở rộng' : 'Expand';
+    expandedPanel = null;
+  }
+
+  if (!isOpen) {
+    wrap.classList.add('panel-expanded');
+    btn.innerHTML = SVG_COLLAPSE;
+    btn.title = state.lang === 'vi' ? 'Thu nhỏ' : 'Collapse';
+    expandedPanel = id;
+  }
+
+  // Trigger layout / redraw at new size (rAF so DOM has time to reflow)
+  requestAnimationFrame(() => {
+    if (id !== 'chart' || isOpen) {
+      resizeCanvas(document.getElementById('canvas-alg'));
+      resizeCanvas(document.getElementById('canvas-proj'));
+      drawFrame();
+    }
+    if (typeof chart !== 'undefined' && chart) chart.resize();
+  });
+
+  // Restore normal layout when collapsing
+  if (isOpen) doLayout();
+}
 
 // ══════════════════════════════════════════════════════════════════
 //  LARGE-N WARNING POPUP

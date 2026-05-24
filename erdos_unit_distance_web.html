@@ -397,31 +397,12 @@
     padding: 4px 6px;
     line-height: 1;
     display: flex; align-items: center; justify-content: center;
-    gap: 5px;
-    font-size: 11px;
     transition: color .15s, border-color .15s, background .15s;
   }
   .expand-btn:hover {
     color: var(--fg);
     border-color: #5060a0;
     background: rgba(30,40,80,0.9);
-  }
-  /* Collapse button is bigger and labelled when panel is open */
-  .expand-btn.is-expanded {
-    top: 10px; right: 12px;
-    padding: 6px 12px;
-    background: rgba(20,26,60,0.92);
-    border-color: #5060a0;
-    color: var(--fg);
-    font-weight: 600;
-    font-size: 12px;
-    border-radius: 7px;
-    box-shadow: 0 2px 12px rgba(0,0,0,0.4);
-  }
-  .expand-btn.is-expanded:hover {
-    background: rgba(40,50,100,0.95);
-    border-color: var(--cyan);
-    color: var(--cyan);
   }
   /* Expanded panel covers all of #content */
   .panel-expanded {
@@ -2707,7 +2688,6 @@ function _collapsePanel(id) {
   const wrapId = id === 'chart' ? 'chart-wrap' : id + '-wrap';
   document.getElementById(wrapId).classList.remove('panel-expanded');
   const btn = document.getElementById('expand-' + id);
-  btn.classList.remove('is-expanded');
   btn.innerHTML = SVG_EXPAND;
   btn.title = state.lang === 'vi' ? 'Mở rộng' : 'Expand';
   expandedPanel = null;
@@ -2724,10 +2704,8 @@ function toggleExpand(id) {
 
   if (!isOpen) {
     wrap.classList.add('panel-expanded');
-    btn.classList.add('is-expanded');
-    const collapseLabel = state.lang === 'vi' ? 'Thu nhỏ  Esc' : 'Collapse  Esc';
-    btn.innerHTML = SVG_COLLAPSE + `<span>${collapseLabel}</span>`;
-    btn.title = state.lang === 'vi' ? 'Thu nhỏ (hoặc nhấn Esc)' : 'Collapse (or press Esc)';
+    btn.innerHTML = SVG_COLLAPSE;
+    btn.title = state.lang === 'vi' ? 'Thu nhỏ (Esc)' : 'Collapse (Esc)';
     expandedPanel = id;
   }
 

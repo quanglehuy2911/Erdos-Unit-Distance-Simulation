@@ -1187,14 +1187,15 @@ function generateQFractal(maxN) {
   }
 
   // Count how many points in nearbyList are at unit distance from (cx,cy).
-  // Uses a slightly relaxed EPS to absorb floating-point error from crossAngles.
-  const SCORE_EPS = 1e-6;
+  // Uses the SAME EPS as the global isUnitPair (1e-8) so that scoring
+  // exactly predicts what the actual pair counter will count later.
+  // Cross-angle floating-point errors are ~1e-13, well within this bound.
   function countPairs(cx, cy, nearbyList) {
     let count = 0;
     for (const ni of nearbyList) {
       const q = pts[ni];
       const ddx = cx - q.x, ddy = cy - q.y;
-      if (Math.abs(ddx * ddx + ddy * ddy - 1.0) < SCORE_EPS) count++;
+      if (Math.abs(ddx * ddx + ddy * ddy - 1.0) < EPS) count++;
     }
     return count;
   }

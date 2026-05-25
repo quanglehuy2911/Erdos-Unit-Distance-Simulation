@@ -1032,18 +1032,28 @@ const METHOD_INFO = [
     color: '#ff6b9d',
     name: { vi: 'Q-Fractal Generation', en: 'Q-Fractal Generation' },
     desc: {
-      vi: 'Cây fractal BFS trong R² với căn chỉnh xuyên nhánh. Gốc = (0,0). Mỗi nút sinh K con ' +
-          'nằm trên đường tròn bán kính 1, mỗi con ở một cung 2π/K. ' +
-          'Với mỗi cung, thuật toán tìm góc đặt con sao cho con cũng cách đúng 1 đơn vị với điểm lân cận có sẵn ' +
-          '(tạo cặp xuyên nhánh chủ động); nếu không tìm được thì dùng góc ngẫu nhiên trong cung. ' +
-          'Lý thuyết: ν ≥ n−1 (cạnh cây). Thực tế vượt đáng kể nhờ các cặp xuyên nhánh.',
-      en: 'BFS fractal tree in R² with cross-branch alignment. Root = (0,0). Each node spawns K children ' +
-          'on a unit circle, one per 2π/K sector. ' +
-          'For each sector, the algorithm finds an angle placing the child at unit distance from ' +
-          'an existing nearby point (deliberate cross-branch pair); falls back to random if none found. ' +
-          'Theory: ν ≥ n−1 (tree edges). Actual count exceeds this via cross-branch connections.',
+      vi: 'Thuật toán tham lam dùng min-heap ưu tiên vị trí có nhiều cặp nhất. ' +
+          'Từ mỗi điểm đã đặt, sinh hai loại ứng viên: ' +
+          '(1) N_CAND điểm đều trên đường tròn đơn vị; ' +
+          '(2) giao điểm chính xác của hai đường tròn đơn vị (cross-angle) — ' +
+          'vị trí cách đúng 1 đơn vị đồng thời với 2 điểm đã có, tạo ≥2 cặp ngay lập tức. ' +
+          'Mỗi ứng viên được ưu tiên theo key = d² − pe×10⁹, ' +
+          'với pe = số điểm hiện có cách đúng 1 đơn vị (tính bằng countPairs tại thời điểm đẩy vào heap). ' +
+          'Ứng viên pe cao nhất luôn được chọn trước → tối đa hoá ν(n) từng bước. ' +
+          'Ràng buộc: tất cả điểm trong đĩa bán kính R, cách nhau ≥ d_min. ' +
+          'Lý thuyết: ν ≥ n−1. Thực tế vượt xa nhờ cross-angle tạo 2–5 cặp mỗi điểm.',
+      en: 'Greedy algorithm using a min-heap to always place the highest-value candidate first. ' +
+          'From each placed point, two types of candidates are generated: ' +
+          '(1) N_CAND evenly-spaced points on the unit circle; ' +
+          '(2) exact cross-angle intersections — positions at unit distance from two existing points ' +
+          'simultaneously, immediately creating ≥2 pairs. ' +
+          'Each candidate is scored by key = d² − pe×10⁹, ' +
+          'where pe = number of existing points exactly at unit distance (via countPairs at push time). ' +
+          'The candidate with the highest pe is always placed first, maximising ν(n) at each step. ' +
+          'Constraints: all points within disk radius R, spaced ≥ d_min apart. ' +
+          'Theory: ν ≥ n−1. Actual count greatly exceeds this via cross-angle placements creating 2–5 pairs each.',
     },
-    header: 'max pairs at distance 1 — Q-Fractal (cross-branch alignment)',
+    header: 'max pairs at distance 1 — Q-Fractal (greedy heap · cross-angle)',
   },
 ];
 
@@ -1059,7 +1069,7 @@ const LANG = {
     secInfo:      'Thông tin phương pháp',
     mc1Sub:       'Mạng lục giác · 6 hàng xóm · ν(n) ≈ 3n',
     mc2Sub:       'n^{1.014} · tháp class field Golod-Shafarevich',
-    mc3Sub:       'Cây fractal · K nhánh · mỗi nhánh 1 điểm/cung 2π/K',
+    mc3Sub:       'Heap tham lam · ưu tiên pe cặp · cross-angle chính xác',
     ctrlNPts:     'N điểm',
     ctrlMaxN:     'tối đa 10 tỷ',
     ctrlSpeed:    'Tốc độ (đ/s)',
@@ -1122,7 +1132,7 @@ const LANG = {
     secInfo:      'Method Info',
     mc1Sub:       'Hexagonal lattice · 6 neighbors · ν(n) ≈ 3n',
     mc2Sub:       'n^{1.014} · Golod-Shafarevich class field tower',
-    mc3Sub:       'Fractal tree · K branches · one point per 2π/K arc',
+    mc3Sub:       'Greedy heap · pe-pair priority · exact cross-angle',
     ctrlNPts:     'N points',
     ctrlMaxN:     'max 10 billion',
     ctrlSpeed:    'Speed (pt/s)',
@@ -2946,12 +2956,14 @@ function updateQFractalInfo() {
   el.innerHTML = state.lang === 'vi'
     ? `Đĩa bán kính <b>R = ${Rf}</b>, d_min = <b>${df}</b>, N_CAND = <b>${nCand}</b>.<br>` +
       `Sức chứa tối đa ≈ ${nMax.toLocaleString()} điểm trong đĩa này.<br>` +
-      `Pop gần gốc nhất → lọc ngoài R, kiểm tra d_min + kết nối d=1 → thêm.<br>` +
-      `Đường cyan đứt = biên đĩa. Tăng R để chứa thêm điểm.`
+      `Heap key = d²−pe×10⁹: ứng viên có nhiều hàng xóm d=1 được ưu tiên trước.<br>` +
+      `Cross-angle sinh điểm cách đúng 1 đồng thời với 2 điểm → tạo ≥2 cặp ngay.<br>` +
+      `Độ phức tạp O(N³/R⁴) vì countPairs gọi trong enqueue. Tăng R để chứa thêm điểm.`
     : `Disk radius <b>R = ${Rf}</b>, d_min = <b>${df}</b>, N_CAND = <b>${nCand}</b>.<br>` +
       `Max capacity ≈ ${nMax.toLocaleString()} points in this disk.<br>` +
-      `Pop closest-to-origin → filter outside R, d_min spacing + d=1 → add.<br>` +
-      `Dashed cyan = disk boundary. Increase R to hold more points.`;
+      `Heap key = d²−pe×10⁹: candidates with more d=1 neighbors get priority.<br>` +
+      `Cross-angle places points at unit distance from two existing → creates ≥2 pairs instantly.<br>` +
+      `O(N³/R⁴) complexity due to countPairs called in enqueue. Increase R to hold more points.`;
 }
 
 function drawFrame() {
